@@ -100,13 +100,11 @@ def create_video_from_images(
                 new_name = f"img_{i:04d}{img_path.suffix}"
                 shutil.copy2(img_path, temp_path / new_name)
 
-            # Updated video filter with proper color space handling
+            # Fixed video filter with correct colorspace syntax
             video_filter = (
                 f"scale=1080:1920:force_original_aspect_ratio=decrease,"
                 f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
                 f"format=yuv420p,"
-                f"colorspace=bt709:bt709:bt709,"
-                f"colorrange=tv,"
                 f"fps={fps}"
             )
 
