@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 # Create directories
-RUN mkdir -p uploads outputs && chmod 755 uploads outputs
+RUN mkdir -p uploads outputs
 
 # Expose port
 EXPOSE 8000
@@ -29,8 +29,6 @@ ENV PYTHONUNBUFFERED=1
 
 # Verify FFmpeg installation
 RUN ffmpeg -version
-
-
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \

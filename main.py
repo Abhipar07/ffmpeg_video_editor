@@ -30,21 +30,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration with environment variables
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
-OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))
-MAX_FILE_SIZE = int(os.environ.get("MAX_FILE_SIZE", 10 * 1024 * 1024))
-
-# Create directories with better error handling
-try:
-    UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
-    OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
-except PermissionError as e:
-    logger.error(f"Permission denied creating directories: {e}")
-except Exception as e:
-    logger.error(f"Error creating directories: {e}")
+# Create directories
+UPLOAD_DIR = Path("uploads")
+OUTPUT_DIR = Path("outputs")
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Configuration
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
 MAX_IMAGES = 10
 SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
@@ -111,7 +104,8 @@ def create_video_from_images(
             cmd = [
                 "ffmpeg", "-y",  # Overwrite output file
                 "-framerate", f"1/{duration_per_image}",  # Input framerate
-                "-pattern_type", "glob",8                "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
+                "-pattern_type", "glob",
+                "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
                 "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
