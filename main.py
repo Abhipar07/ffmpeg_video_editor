@@ -115,24 +115,24 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> None:
         raise HTTPException(status_code=500, detail="Failed to save file")
 
 def get_video_filter(format_type: VideoFormat, blur_background: bool = False, background_color: str = "black") -> str:
-    """Get FFmpeg video filter string based on format - Enhanced with proper color space handling"""
+    """Get FFmpeg video filter string based on format - Fixed deprecated pixel format handling"""
     config = VIDEO_FORMATS[format_type]
     width = config["width"]
     height = config["height"]
 
-    # Enhanced approach with proper color space conversion
-    # Handle JPEG color space (yuvj420p) to standard video color space (yuv420p)
-    base_filter = f"scale=in_range=full:in_color_matrix=bt601:out_range=tv:out_color_matrix=bt709"
+    # Fix deprecated pixel format by explicitly converting format first
+    # This approach converts yuvj420p (deprecated) to yuv420p before scaling
+    format_filter = "format=yuv420p"
     scale_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease"
     pad_filter = f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background_color}"
 
     if blur_background:
         # For blur background, we'd need a more complex filter
-        # For now, keeping it simple with proper color space handling
-        return f"{base_filter},{scale_filter},{pad_filter}"
+        # For now, keeping it simple with proper format conversion
+        return f"{format_filter},{scale_filter},{pad_filter}"
     else:
-        # Standard scaling with padding and color space conversion
-        return f"{base_filter},{scale_filter},{pad_filter}"
+        # Standard scaling with padding and explicit format conversion
+        return f"{format_filter},{scale_filter},{pad_filter}"
 
 def create_video_from_images(
     image_paths: List[Path], 
@@ -144,7 +144,7 @@ def create_video_from_images(
     blur_background: bool = False,
     background_color: str = "black"
 ) -> bool:
-    """Create video from images using FFmpeg with enhanced color space handling"""
+    """Create video from images using FFmpeg with fixed color space handling"""
     try:
         logger.info(f"Creating video with {len(image_paths)} images, format: {format_type}")
         
@@ -281,7 +281,7 @@ def create_video_from_images(
         return False
 
 def create_video_fallback(temp_videos: List[Path], output_path: Path, temp_path: Path) -> bool:
-    """Fallback method for video creation with proper color space handling"""
+    """Fallback method for video creation with fixed pixel format handling"""
     try:
         logger.info("Using fallback concatenation method")
         
