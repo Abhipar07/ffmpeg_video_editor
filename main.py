@@ -100,38 +100,29 @@ def create_video_from_images(
                 new_name = f"img_{i:04d}{img_path.suffix}"
                 shutil.copy2(img_path, temp_path / new_name)
 
-            # Fixed video filter with correct colorspace syntax
+            # Enhanced video filter with proper colorspace handling to eliminate warnings
             video_filter = (
-                f"scale=1080:1920:force_original_aspect_ratio=decrease,"
+                f"scale=1080:1920:force_original_aspect_ratio=decrease:in_color_matrix=auto:out_color_matrix=bt709,"
                 f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+                f"scale=in_range=full:out_range=tv,"
                 f"format=yuv420p,"
                 f"fps={fps}"
             )
 
-            # FFmpeg command to create slideshow with crossfade transitions
-            cmd = [
-                "ffmpeg", "-y",  # Overwrite output file
-                "-framerate", f"1/{duration_per_image}",  # Input framerate
-                "-pattern_type", "glob",
-                "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
-                "-vf", video_filter,
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-color_range", "tv",
+            # Alternative approach using input options to handle colorspace
+            input_options = [
                 "-colorspace", "bt709",
                 "-color_primaries", "bt709",
                 "-color_trc", "bt709",
-                "-preset", "fast",
-                "-crf", "23",
-                str(output_path)
+                "-color_range", "pc"  # Specify full range for JPEG input
             ]
 
-            # Alternative command for better compatibility
             if len(image_paths) == 1:
                 # Single image - create a short video
                 cmd = [
                     "ffmpeg", "-y",
-                    "-loop", "1",
+                    "-loop", "1"
+                ] + input_options + [
                     "-i", str(image_paths[0]),
                     "-t", str(duration_per_image * len(image_paths)),
                     "-vf", video_filter,
@@ -155,7 +146,8 @@ def create_video_from_images(
 
                     single_cmd = [
                         "ffmpeg", "-y",
-                        "-loop", "1",
+                        "-loop", "1"
+                    ] + input_options + [
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
                         "-vf", video_filter,
@@ -181,18 +173,13 @@ def create_video_from_images(
                     for video in temp_videos:
                         f.write(f"file '{video}'\n")
 
-                # Concatenate videos with proper color handling
+                # Concatenate videos
                 concat_cmd = [
                     "ffmpeg", "-y",
                     "-f", "concat",
                     "-safe", "0",
                     "-i", str(concat_file),
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    "-color_range", "tv",
-                    "-colorspace", "bt709",
-                    "-color_primaries", "bt709",
-                    "-color_trc", "bt709",
+                    "-c:v", "copy",  # Use copy since individual videos are already properly encoded
                     str(output_path)
                 ]
 
