@@ -30,14 +30,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create directories
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Configuration with environment variables
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "outputs"))
+MAX_FILE_SIZE = int(os.environ.get("MAX_FILE_SIZE", 10 * 1024 * 1024))
+
+# Create directories with better error handling
+try:
+    UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+    OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
+except PermissionError as e:
+    logger.error(f"Permission denied creating directories: {e}")
+except Exception as e:
+    logger.error(f"Error creating directories: {e}")
 
 # Configuration
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
 MAX_IMAGES = 10
 SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}

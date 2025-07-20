@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 # Create directories
-RUN mkdir -p uploads outputs
+/download/video_f74d15e4-c3ce-4d6e-833a-b245fbf7dfab.mp4
 
 # Expose port
 EXPOSE 8000
@@ -29,6 +29,8 @@ ENV PYTHONUNBUFFERED=1
 
 # Verify FFmpeg installation
 RUN ffmpeg -version
+
+
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
