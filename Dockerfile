@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 # Create directories
-/download/video_f74d15e4-c3ce-4d6e-833a-b245fbf7dfab.mp4
+RUN mkdir -p uploads outputs && chmod 755 uploads outputs
 
 # Expose port
 EXPOSE 8000
