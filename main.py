@@ -115,19 +115,24 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> None:
         raise HTTPException(status_code=500, detail="Failed to save file")
 
 def get_video_filter(format_type: VideoFormat, blur_background: bool = False, background_color: str = "black") -> str:
-    """Get FFmpeg video filter string based on format - simplified for better compatibility"""
+    """Get FFmpeg video filter string based on format - Enhanced with proper color space handling"""
     config = VIDEO_FORMATS[format_type]
     width = config["width"]
     height = config["height"]
-    
-    # Simplified approach - just use basic scaling and padding
-    # This is more reliable across different FFmpeg versions
+
+    # Enhanced approach with proper color space conversion
+    # Handle JPEG color space (yuvj420p) to standard video color space (yuv420p)
+    base_filter = f"scale=in_range=full:in_color_matrix=bt601:out_range=tv:out_color_matrix=bt709"
+    scale_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease"
+    pad_filter = f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background_color}"
+
     if blur_background:
-        # Simple blur background approach
-        return f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background_color}"
+        # For blur background, we'd need a more complex filter
+        # For now, keeping it simple with proper color space handling
+        return f"{base_filter},{scale_filter},{pad_filter}"
     else:
-        # Standard scaling with padding
-        return f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background_color}"
+        # Standard scaling with padding and color space conversion
+        return f"{base_filter},{scale_filter},{pad_filter}"
 
 def create_video_from_images(
     image_paths: List[Path], 
@@ -139,7 +144,7 @@ def create_video_from_images(
     blur_background: bool = False,
     background_color: str = "black"
 ) -> bool:
-    """Create video from images using FFmpeg with support for different formats - Enhanced error handling"""
+    """Create video from images using FFmpeg with enhanced color space handling"""
     try:
         logger.info(f"Creating video with {len(image_paths)} images, format: {format_type}")
         
@@ -168,9 +173,11 @@ def create_video_from_images(
                     "-t", str(duration_per_image),
                     "-vf", video_filter,
                     "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    "-preset", "fast",  # Use fast preset for better compatibility
-                    "-crf", "23",  # Use standard CRF value
+                    "-pix_fmt", "yuv420p",  # Explicitly set output pixel format
+                    "-color_range", "tv",   # Set output color range
+                    "-colorspace", "bt709", # Set output colorspace
+                    "-preset", "fast",
+                    "-crf", "23",
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
@@ -206,7 +213,9 @@ def create_video_from_images(
                         "-t", str(duration_per_image),
                         "-vf", video_filter,
                         "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
+                        "-pix_fmt", "yuv420p",  # Explicitly set output pixel format
+                        "-color_range", "tv",   # Set output color range
+                        "-colorspace", "bt709", # Set output colorspace
                         "-preset", "fast",
                         "-crf", "23",
                         "-movflags", "+faststart",
@@ -272,7 +281,7 @@ def create_video_from_images(
         return False
 
 def create_video_fallback(temp_videos: List[Path], output_path: Path, temp_path: Path) -> bool:
-    """Fallback method for video creation using simpler approach"""
+    """Fallback method for video creation with proper color space handling"""
     try:
         logger.info("Using fallback concatenation method")
         
@@ -289,6 +298,9 @@ def create_video_fallback(temp_videos: List[Path], output_path: Path, temp_path:
             "-i", str(concat_file.absolute()),
             "-c:v", "libx264",  # Re-encode instead of copy
             "-c:a", "aac",
+            "-pix_fmt", "yuv420p",  # Ensure consistent pixel format
+            "-color_range", "tv",   # Set output color range
+            "-colorspace", "bt709", # Set output colorspace
             "-preset", "fast",
             "-crf", "23",
             str(output_path)
