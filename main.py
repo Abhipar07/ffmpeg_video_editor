@@ -100,38 +100,24 @@ def create_video_from_images(
                 new_name = f"img_{i:04d}{img_path.suffix}"
                 shutil.copy2(img_path, temp_path / new_name)
 
-            # Enhanced video filter with proper colorspace handling to eliminate warnings
+            # Correct video filter to handle JPEG colorspace properly
             video_filter = (
-                f"scale=1080:1920:force_original_aspect_ratio=decrease:in_color_matrix=auto:out_color_matrix=bt709,"
+                f"scale=1080:1920:force_original_aspect_ratio=decrease,"
                 f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-                f"scale=in_range=full:out_range=tv,"
                 f"format=yuv420p,"
                 f"fps={fps}"
             )
-
-            # Alternative approach using input options to handle colorspace
-            input_options = [
-                "-colorspace", "bt709",
-                "-color_primaries", "bt709",
-                "-color_trc", "bt709",
-                "-color_range", "pc"  # Specify full range for JPEG input
-            ]
 
             if len(image_paths) == 1:
                 # Single image - create a short video
                 cmd = [
                     "ffmpeg", "-y",
-                    "-loop", "1"
-                ] + input_options + [
+                    "-loop", "1",
                     "-i", str(image_paths[0]),
                     "-t", str(duration_per_image * len(image_paths)),
                     "-vf", video_filter,
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
-                    "-color_range", "tv",
-                    "-colorspace", "bt709",
-                    "-color_primaries", "bt709",
-                    "-color_trc", "bt709",
                     "-preset", "fast",
                     "-crf", "23",
                     str(output_path)
@@ -146,17 +132,12 @@ def create_video_from_images(
 
                     single_cmd = [
                         "ffmpeg", "-y",
-                        "-loop", "1"
-                    ] + input_options + [
+                        "-loop", "1",
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
                         "-vf", video_filter,
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-color_range", "tv",
-                        "-colorspace", "bt709",
-                        "-color_primaries", "bt709",
-                        "-color_trc", "bt709",
                         "-preset", "fast",
                         "-crf", "23",
                         str(temp_video)
@@ -179,7 +160,7 @@ def create_video_from_images(
                     "-f", "concat",
                     "-safe", "0",
                     "-i", str(concat_file),
-                    "-c:v", "copy",  # Use copy since individual videos are already properly encoded
+                    "-c:v", "copy",
                     str(output_path)
                 ]
 
