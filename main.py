@@ -96,6 +96,8 @@ def create_reel_video_with_transitions(
 ) -> bool:
     """Create reel format video from images with smooth transitions using FFmpeg"""
     try:
+        logger.info(f"Creating reel video with {len(image_paths)} images")
+        
         if len(image_paths) == 1:
             # Single image - create a short video
             cmd = [
@@ -106,115 +108,240 @@ def create_reel_video_with_transitions(
                 "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
-                "-preset", "medium",
-                "-crf", "20",
+                "-preset", "fast",  # Changed from medium to fast for better compatibility
+                "-crf", "23",       # Changed from 20 to 23 for smaller file size
                 str(output_path)
             ]
-        else:
-            # Multiple images - create slideshow with smooth transitions
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_path = Path(temp_dir)
-                
-                # Create individual videos for each image with proper scaling
-                temp_videos = []
-                for i, img_path in enumerate(image_paths):
-                    temp_video = temp_path / f"video_{i:04d}.mp4"
-                    temp_videos.append(temp_video)
-                    
-                    # Create individual video clip for each image
-                    single_cmd = [
-                        "ffmpeg", "-y",
-                        "-loop", "1",
-                        "-i", str(img_path),
-                        "-t", str(duration_per_image + transition_duration),  # Add extra time for transition
-                        "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "medium",
-                        "-crf", "20",
-                        str(temp_video)
-                    ]
-                    
-                    result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=120)
-                    if result.returncode != 0:
-                        logger.error(f"Error creating video for image {i}: {result.stderr}")
-                        return False
-                
-                # Create complex filter for smooth transitions
-                if transition_type == "crossfade":
-                    # Build crossfade filter chain
-                    filter_complex = ""
-                    labels = []
-                    
-                    # Generate input labels
-                    for i in range(len(temp_videos)):
-                        labels.append(f"[{i}:v]")
-                    
-                    # Create crossfade chain
-                    current_label = labels[0]
-                    for i in range(1, len(labels)):
-                        if i == 1:
-                            filter_complex += f"{current_label}{labels[i]}xfade=transition=fade:duration={transition_duration}:offset={duration_per_image * (i-1) + duration_per_image - transition_duration}[v{i}];"
-                        else:
-                            filter_complex += f"[v{i-1}]{labels[i]}xfade=transition=fade:duration={transition_duration}:offset={duration_per_image * (i-1) + duration_per_image - transition_duration}[v{i}];"
-                        current_label = f"[v{i}]"
-                    
-                    # Remove the last semicolon
-                    filter_complex = filter_complex.rstrip(';')
-                    
-                    # Create input list for ffmpeg
-                    input_args = []
-                    for video in temp_videos:
-                        input_args.extend(["-i", str(video)])
-                    
-                    # Final command with crossfade
-                    final_cmd = [
-                        "ffmpeg", "-y"
-                    ] + input_args + [
-                        "-filter_complex", filter_complex,
-                        "-map", f"[v{len(labels)-1}]",
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "medium",
-                        "-crf", "20",
-                        str(output_path)
-                    ]
-                    
-                else:
-                    # Fallback to simple concatenation for other transition types
-                    concat_file = temp_path / "concat.txt"
-                    with open(concat_file, 'w') as f:
-                        for video in temp_videos:
-                            f.write(f"file '{video}'\n")
-                    
-                    final_cmd = [
-                        "ffmpeg", "-y",
-                        "-f", "concat",
-                        "-safe", "0",
-                        "-i", str(concat_file),
-                        "-c", "copy",
-                        str(output_path)
-                    ]
-                
-                # Execute final command
-                result = subprocess.run(final_cmd, capture_output=True, text=True, timeout=600)
-                if result.returncode != 0:
-                    logger.error(f"Error creating final video: {result.stderr}")
-                    return False
-                
-                return True
-        
-        # Execute single image command
-        if len(image_paths) == 1:
+            
+            logger.info(f"Single image command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
+                logger.error(f"FFmpeg error for single image: {result.stderr}")
                 return False
-        
-        return True
+            return True
+            
+        else:
+            # Multiple images - use simpler approach that's more reliable
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                logger.info(f"Using temp directory: {temp_path}")
+                
+                if transition_type == "crossfade" and len(image_paths) <= 10:
+                    # Use direct crossfade for smaller number of images
+                    return create_crossfade_video(image_paths, output_path, duration_per_image, transition_duration, fps, temp_path)
+                else:
+                    # Use concatenation method for larger number of images or other transitions
+                    return create_concat_video(image_paths, output_path, duration_per_image, fps, temp_path)
             
     except Exception as e:
         logger.error(f"Error creating reel video: {e}")
+        return False
+
+def create_simple_reel_video(
+    image_paths: List[Path], 
+    output_path: Path, 
+    duration_per_image: float,
+    fps: int
+) -> bool:
+    """Fallback method: Create simple reel video without transitions"""
+    try:
+        logger.info("Using simple fallback method for video creation")
+        
+        if len(image_paths) == 1:
+            # Single image
+            cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", str(image_paths[0]),
+                "-t", str(duration_per_image),
+                "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black",
+                "-r", str(fps),
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "ultrafast",
+                "-crf", "28",
+                str(output_path)
+            ]
+        else:
+            # Multiple images using image2 demuxer
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                
+                # Copy images with sequential naming
+                for i, img_path in enumerate(image_paths):
+                    ext = img_path.suffix
+                    new_path = temp_path / f"img{i:05d}{ext}"
+                    shutil.copy2(img_path, new_path)
+                
+                # Create image list file
+                img_list_file = temp_path / "images.txt"
+                with open(img_list_file, 'w') as f:
+                    for i in range(len(image_paths)):
+                        ext = image_paths[i].suffix
+                        f.write(f"file 'img{i:05d}{ext}'\n")
+                        f.write(f"duration {duration_per_image}\n")
+                    # Duplicate last image for proper duration
+                    if len(image_paths) > 0:
+                        ext = image_paths[-1].suffix
+                        f.write(f"file 'img{len(image_paths)-1:05d}{ext}'\n")
+                
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", str(img_list_file),
+                    "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black",
+                    "-r", str(fps),
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-preset", "ultrafast",
+                    "-crf", "28",
+                    str(output_path)
+                ]
+        
+        logger.info(f"Fallback command: {' '.join(cmd[:10])}...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        
+        if result.returncode != 0:
+            logger.error(f"Fallback method also failed: {result.stderr}")
+            return False
+        
+        logger.info("Fallback method succeeded")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error in simple reel video creation: {e}")
+        return False
+
+def create_crossfade_video(
+    image_paths: List[Path], 
+    output_path: Path, 
+    duration_per_image: float,
+    transition_duration: float,
+    fps: int,
+    temp_path: Path
+) -> bool:
+    """Create video with crossfade transitions (for smaller number of images)"""
+    try:
+        # Create input arguments
+        input_args = []
+        for img_path in image_paths:
+            input_args.extend([
+                "-loop", "1",
+                "-t", str(duration_per_image),
+                "-i", str(img_path)
+            ])
+        
+        # Build filter complex for crossfade
+        filter_parts = []
+        
+        # Scale all inputs first
+        for i in range(len(image_paths)):
+            filter_parts.append(f"[{i}:v]scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={fps},settb=1/30[v{i}]")
+        
+        # Create crossfade chain
+        if len(image_paths) == 2:
+            filter_parts.append(f"[v0][v1]xfade=transition=fade:duration={transition_duration}:offset={duration_per_image-transition_duration}[out]")
+        else:
+            # Chain multiple crossfades
+            current_label = "v0"
+            for i in range(1, len(image_paths)):
+                offset = duration_per_image * i - transition_duration * i
+                if i == 1:
+                    filter_parts.append(f"[{current_label}][v{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}[tmp{i}]")
+                    current_label = f"tmp{i}"
+                elif i == len(image_paths) - 1:
+                    filter_parts.append(f"[{current_label}][v{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}[out]")
+                else:
+                    filter_parts.append(f"[{current_label}][v{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}[tmp{i}]")
+                    current_label = f"tmp{i}"
+        
+        filter_complex = ";".join(filter_parts)
+        
+        cmd = [
+            "ffmpeg", "-y"
+        ] + input_args + [
+            "-filter_complex", filter_complex,
+            "-map", "[out]",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "fast",
+            "-crf", "23",
+            str(output_path)
+        ]
+        
+        logger.info(f"Crossfade command: {' '.join(cmd[:10])}...")  # Log first few parts
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            logger.error(f"Crossfade error: {result.stderr}")
+            return False
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error in crossfade video creation: {e}")
+        return False
+
+def create_concat_video(
+    image_paths: List[Path], 
+    output_path: Path, 
+    duration_per_image: float,
+    fps: int,
+    temp_path: Path
+) -> bool:
+    """Create video using concatenation method (more reliable for many images)"""
+    try:
+        # Create individual videos for each image
+        temp_videos = []
+        for i, img_path in enumerate(image_paths):
+            temp_video = temp_path / f"video_{i:04d}.mp4"
+            temp_videos.append(temp_video)
+            
+            # Create individual video clip
+            single_cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", str(img_path),
+                "-t", str(duration_per_image),
+                "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "fast",
+                "-crf", "23",
+                str(temp_video)
+            ]
+            
+            logger.info(f"Creating video {i+1}/{len(image_paths)}")
+            result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                logger.error(f"Error creating video for image {i}: {result.stderr}")
+                return False
+        
+        # Create concat file
+        concat_file = temp_path / "concat.txt"
+        with open(concat_file, 'w') as f:
+            for video in temp_videos:
+                f.write(f"file '{video.absolute()}'\n")
+        
+        # Concatenate videos
+        concat_cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_file),
+            "-c", "copy",
+            str(output_path)
+        ]
+        
+        logger.info("Concatenating videos")
+        result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            logger.error(f"Error concatenating videos: {result.stderr}")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error in concat video creation: {e}")
         return False
 
 def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path, fade_audio: bool = True) -> bool:
@@ -352,7 +479,19 @@ async def create_reel_video(
         )
         
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to create reel video from images")
+            logger.warning("Primary video creation failed, trying fallback method")
+            # Try fallback method with simpler approach
+            success = create_simple_reel_video(
+                image_paths,
+                temp_video_path if audio_path else final_video_path,
+                duration_per_image,
+                fps
+            )
+            if not success:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Failed to create reel video from images. Check server logs for details."
+                )
         
         # Add audio if provided
         if audio_path:
