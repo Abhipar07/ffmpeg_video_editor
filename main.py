@@ -100,14 +100,21 @@ def create_video_from_images(
                 new_name = f"img_{i:04d}{img_path.suffix}"
                 shutil.copy2(img_path, temp_path / new_name)
 
-            # Correct video filter to handle JPEG colorspace properly
-            video_filter = (
-                f"scale=1080:1920:force_original_aspect_ratio=decrease,"
-                f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-                f"format=yuv420p,"
-                f"fps={fps}"
-            )
+            # FFmpeg command to create slideshow with crossfade transitions
+            cmd = [
+                "ffmpeg", "-y",  # Overwrite output file
+                "-framerate", f"1/{duration_per_image}",  # Input framerate
+                "-pattern_type", "glob",
+                "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
+                "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "fast",
+                "-crf", "23",
+                str(output_path)
+            ]
 
+            # Alternative command for better compatibility
             if len(image_paths) == 1:
                 # Single image - create a short video
                 cmd = [
@@ -115,7 +122,7 @@ def create_video_from_images(
                     "-loop", "1",
                     "-i", str(image_paths[0]),
                     "-t", str(duration_per_image * len(image_paths)),
-                    "-vf", video_filter,
+                    "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
                     "-preset", "fast",
@@ -135,7 +142,7 @@ def create_video_from_images(
                         "-loop", "1",
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
-                        "-vf", video_filter,
+                        "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
                         "-preset", "fast",
@@ -160,7 +167,7 @@ def create_video_from_images(
                     "-f", "concat",
                     "-safe", "0",
                     "-i", str(concat_file),
-                    "-c:v", "copy",
+                    "-c", "copy",
                     str(output_path)
                 ]
 
@@ -195,7 +202,6 @@ def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) ->
             "-shortest",  # End when shortest stream ends
             "-map", "0:v:0",  # Video from first input
             "-map", "1:a:0",  # Audio from second input
-            "-movflags", "+faststart",  # Optimize for streaming/reel format
             str(output_path)
         ]
 
