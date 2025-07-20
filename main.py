@@ -38,7 +38,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Configuration
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
-MAX_IMAGES = 10
+MAX_IMAGES = 30
 SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
@@ -106,7 +106,7 @@ def create_video_from_images(
                 "-framerate", f"1/{duration_per_image}",  # Input framerate
                 "-pattern_type", "glob",
                 "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
-                "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
                 "-preset", "fast",
@@ -122,7 +122,7 @@ def create_video_from_images(
                     "-loop", "1",
                     "-i", str(image_paths[0]),
                     "-t", str(duration_per_image * len(image_paths)),
-                    "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                    "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
                     "-preset", "fast",
@@ -142,7 +142,7 @@ def create_video_from_images(
                         "-loop", "1",
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
-                        "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                        "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
                         "-preset", "fast",
