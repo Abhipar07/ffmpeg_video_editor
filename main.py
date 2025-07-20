@@ -91,49 +91,65 @@ def create_video_from_images(
 ) -> bool:
     """Create video from images using FFmpeg"""
     try:
+        logger.info(f"Creating video from {len(image_paths)} images")
+        logger.info(f"Output path: {output_path}")
+
+        # Verify all input images exist
+        for i, img_path in enumerate(image_paths):
+            if not img_path.exists():
+                logger.error(f"Image {i} does not exist: {img_path}")
+                return False
+            logger.info(f"Image {i}: {img_path} (size: {img_path.stat().st_size} bytes)")
+
         # Create a temporary directory for processed images
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
+            logger.info(f"Using temp directory: {temp_path}")
 
-            # Copy and rename images to sequential format
-            for i, img_path in enumerate(image_paths):
-                new_name = f"img_{i:04d}{img_path.suffix}"
-                shutil.copy2(img_path, temp_path / new_name)
-
-            # FFmpeg command to create slideshow with crossfade transitions
-            cmd = [
-                "ffmpeg", "-y",  # Overwrite output file
-                "-framerate", f"1/{duration_per_image}",  # Input framerate
-                "-pattern_type", "glob",
-                "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
-                "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-preset", "fast",
-                "-crf", "23",
-                str(output_path)
-            ]
-
-            # Alternative command for better compatibility
             if len(image_paths) == 1:
                 # Single image - create a short video
+                logger.info("Creating video from single image")
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-i", str(image_paths[0]),
-                    "-t", str(duration_per_image * len(image_paths)),
-                    "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                    "-t", str(duration_per_image),
+                    "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
                     "-preset", "fast",
                     "-crf", "23",
+                    "-movflags", "+faststart",
                     str(output_path)
                 ]
+
+                logger.info(f"FFmpeg command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg error (return code {result.returncode}): {result.stderr}")
+                    logger.error(f"FFmpeg stdout: {result.stdout}")
+                    return False
+
+                logger.info("Single image video created successfully")
+                return True
+
             else:
                 # Multiple images - create slideshow
-                # First, create individual videos for each image
-                temp_videos = []
+                logger.info("Creating slideshow from multiple images")
+
+                # Copy and rename images to sequential format
+                copied_images = []
                 for i, img_path in enumerate(image_paths):
+                    new_name = f"img_{i:04d}{img_path.suffix.lower()}"
+                    dest_path = temp_path / new_name
+                    shutil.copy2(img_path, dest_path)
+                    copied_images.append(dest_path)
+                    logger.info(f"Copied {img_path} to {dest_path}")
+
+                # Create individual videos for each image
+                temp_videos = []
+                for i, img_path in enumerate(copied_images):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
                     temp_videos.append(temp_video)
 
@@ -142,7 +158,7 @@ def create_video_from_images(
                         "-loop", "1",
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
-                        "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                        "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
                         "-preset", "fast",
@@ -150,16 +166,26 @@ def create_video_from_images(
                         str(temp_video)
                     ]
 
+                    logger.info(f"Creating video {i+1}/{len(copied_images)}: {' '.join(single_cmd)}")
                     result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=120)
                     if result.returncode != 0:
                         logger.error(f"Error creating video for image {i}: {result.stderr}")
+                        logger.error(f"FFmpeg stdout: {result.stdout}")
                         return False
+
+                    if not temp_video.exists():
+                        logger.error(f"Temp video was not created: {temp_video}")
+                        return False
+
+                    logger.info(f"Created temp video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
 
                 # Create concat file
                 concat_file = temp_path / "concat.txt"
                 with open(concat_file, 'w') as f:
                     for video in temp_videos:
-                        f.write(f"file '{video}'\n")
+                        f.write(f"file '{video.absolute()}'\n")
+
+                logger.info(f"Created concat file with {len(temp_videos)} videos")
 
                 # Concatenate videos
                 concat_cmd = [
@@ -168,26 +194,27 @@ def create_video_from_images(
                     "-safe", "0",
                     "-i", str(concat_file),
                     "-c", "copy",
+                    "-movflags", "+faststart",
                     str(output_path)
                 ]
 
+                logger.info(f"Concatenating videos: {' '.join(concat_cmd)}")
                 result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode != 0:
                     logger.error(f"Error concatenating videos: {result.stderr}")
+                    logger.error(f"FFmpeg stdout: {result.stdout}")
                     return False
 
+                logger.info("Slideshow video created successfully")
                 return True
 
-            # Execute the command for single image
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
-                return False
-
-            return True
-
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"FFmpeg command timed out: {e}")
+        return False
     except Exception as e:
         logger.error(f"Error creating video: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) -> bool:
