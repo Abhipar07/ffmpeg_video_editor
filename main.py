@@ -114,11 +114,12 @@ def create_video_from_images(
                     "-loop", "1",
                     "-i", str(image_paths[0]),
                     "-t", str(duration_per_image),
-                    "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
                     "-preset", "fast",
                     "-crf", "23",
+                    "-r", str(fps),
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
@@ -129,6 +130,11 @@ def create_video_from_images(
                 if result.returncode != 0:
                     logger.error(f"FFmpeg error (return code {result.returncode}): {result.stderr}")
                     logger.error(f"FFmpeg stdout: {result.stdout}")
+                    return False
+
+                # Check output file size
+                if not output_path.exists() or output_path.stat().st_size < 1000:
+                    logger.error("Output video file is empty or too small.")
                     return False
 
                 logger.info("Single image video created successfully")
@@ -158,11 +164,12 @@ def create_video_from_images(
                         "-loop", "1",
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
-                        "-vf", f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
                         "-preset", "fast",
                         "-crf", "23",
+                        "-r", str(fps),
                         str(temp_video)
                     ]
 
@@ -173,13 +180,13 @@ def create_video_from_images(
                         logger.error(f"FFmpeg stdout: {result.stdout}")
                         return False
 
-                    if not temp_video.exists():
-                        logger.error(f"Temp video was not created: {temp_video}")
+                    if not temp_video.exists() or temp_video.stat().st_size < 1000:
+                        logger.error(f"Temp video was not created or is too small: {temp_video}")
                         return False
 
                     logger.info(f"Created temp video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
 
-                # Create concat file
+                # Create concat file with absolute paths
                 concat_file = temp_path / "concat.txt"
                 with open(concat_file, 'w') as f:
                     for video in temp_videos:
@@ -203,6 +210,11 @@ def create_video_from_images(
                 if result.returncode != 0:
                     logger.error(f"Error concatenating videos: {result.stderr}")
                     logger.error(f"FFmpeg stdout: {result.stdout}")
+                    return False
+
+                # Check output file size
+                if not output_path.exists() or output_path.stat().st_size < 1000:
+                    logger.error("Output video file is empty or too small after concat.")
                     return False
 
                 logger.info("Slideshow video created successfully")
