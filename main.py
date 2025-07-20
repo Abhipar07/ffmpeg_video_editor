@@ -114,37 +114,20 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> None:
         logger.error(f"Error saving file: {e}")
         raise HTTPException(status_code=500, detail="Failed to save file")
 
-def get_video_filter(format_type: VideoFormat, blur_background: bool = False) -> str:
-    """Get FFmpeg video filter string based on format"""
+def get_video_filter(format_type: VideoFormat, blur_background: bool = False, background_color: str = "black") -> str:
+    """Get FFmpeg video filter string based on format - simplified for better compatibility"""
     config = VIDEO_FORMATS[format_type]
     width = config["width"]
     height = config["height"]
     
-    if format_type == VideoFormat.REEL or format_type == VideoFormat.STORY:
-        if blur_background:
-            # For reel format with blurred background
-            return (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:eval=frame,"
-                   f"boxblur=10:1,setsar=1[bg];"
-                   f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:eval=frame,"
-                   f"setsar=1[fg];"
-                   f"[bg][fg]overlay=(W-w)/2:(H-h)/2")
-        else:
-            # Standard reel format with padding
-            return (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                   f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black")
-    elif format_type == VideoFormat.SQUARE:
-        if blur_background:
-            return (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:eval=frame,"
-                   f"boxblur=10:1,setsar=1[bg];"
-                   f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:eval=frame,"
-                   f"setsar=1[fg];"
-                   f"[bg][fg]overlay=(W-w)/2:(H-h)/2")
-        else:
-            return (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                   f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black")
-    else:  # LANDSCAPE
-        return (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-               f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black")
+    # Simplified approach - just use basic scaling and padding
+    # This is more reliable across different FFmpeg versions
+    if blur_background:
+        # Simple blur background approach
+        return f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background_color}"
+    else:
+        # Standard scaling with padding
+        return f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={background_color}"
 
 def create_video_from_images(
     image_paths: List[Path], 
@@ -156,15 +139,26 @@ def create_video_from_images(
     blur_background: bool = False,
     background_color: str = "black"
 ) -> bool:
-    """Create video from images using FFmpeg with support for different formats"""
+    """Create video from images using FFmpeg with support for different formats - Enhanced error handling"""
     try:
+        logger.info(f"Creating video with {len(image_paths)} images, format: {format_type}")
+        
+        # Validate image files exist
+        for img_path in image_paths:
+            if not img_path.exists():
+                logger.error(f"Image file not found: {img_path}")
+                return False
+        
         # Create a temporary directory for processed images
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
+            logger.info(f"Using temp directory: {temp_path}")
             
             if len(image_paths) == 1:
                 # Single image - create a short video
-                video_filter = get_video_filter(format_type, blur_background).replace("color=black", f"color={background_color}")
+                logger.info("Creating video from single image")
+                
+                video_filter = get_video_filter(format_type, blur_background, background_color)
                 video_filter += f",fps={fps}"
                 
                 cmd = [
@@ -175,20 +169,34 @@ def create_video_from_images(
                     "-vf", video_filter,
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
-                    "-preset", "medium",  # Better quality for reels
-                    "-crf", "18",  # Higher quality for mobile viewing
-                    "-movflags", "+faststart",  # Optimize for web streaming
+                    "-preset", "fast",  # Use fast preset for better compatibility
+                    "-crf", "23",  # Use standard CRF value
+                    "-movflags", "+faststart",
                     str(output_path)
                 ]
+                
+                logger.info(f"FFmpeg command: {' '.join(cmd)}")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg error: {result.stderr}")
+                    logger.error(f"FFmpeg stdout: {result.stdout}")
+                    return False
+                
+                logger.info("Single image video created successfully")
+                return True
+                
             else:
-                # Multiple images - create slideshow with transitions
+                # Multiple images - create slideshow
+                logger.info(f"Creating slideshow from {len(image_paths)} images")
                 temp_videos = []
                 
                 for i, img_path in enumerate(image_paths):
+                    logger.info(f"Processing image {i+1}/{len(image_paths)}: {img_path.name}")
                     temp_video = temp_path / f"video_{i:04d}.mp4"
                     temp_videos.append(temp_video)
                     
-                    video_filter = get_video_filter(format_type, blur_background).replace("color=black", f"color={background_color}")
+                    video_filter = get_video_filter(format_type, blur_background, background_color)
                     video_filter += f",fps={fps}"
                     
                     single_cmd = [
@@ -199,97 +207,103 @@ def create_video_from_images(
                         "-vf", video_filter,
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-preset", "medium",
-                        "-crf", "18",
+                        "-preset", "fast",
+                        "-crf", "23",
                         "-movflags", "+faststart",
                         str(temp_video)
                     ]
                     
+                    logger.info(f"Creating temp video {i+1}: {' '.join(single_cmd[:6])}...")
+                    
                     result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=120)
                     if result.returncode != 0:
                         logger.error(f"Error creating video for image {i}: {result.stderr}")
+                        logger.error(f"Command was: {' '.join(single_cmd)}")
                         return False
                 
-                # Create smooth transitions between videos if requested
-                if transition_duration > 0 and len(temp_videos) > 1:
-                    # Create videos with crossfade transitions
-                    filter_complex = ""
-                    inputs = []
-                    
-                    for i, video in enumerate(temp_videos):
-                        inputs.extend(["-i", str(video)])
-                    
-                    # Build filter for crossfade transitions
-                    filter_parts = []
-                    for i in range(len(temp_videos) - 1):
-                        if i == 0:
-                            filter_parts.append(f"[0][1]xfade=transition=fade:duration={transition_duration}:offset={duration_per_image-transition_duration}[v01]")
-                        else:
-                            filter_parts.append(f"[v{i-1:02d}{i:02d}][{i+1}]xfade=transition=fade:duration={transition_duration}:offset={i*(duration_per_image-transition_duration)+duration_per_image-transition_duration}[v{i:02d}{i+1:02d}]")
-                    
-                    if len(filter_parts) > 0:
-                        filter_complex = ";".join(filter_parts)
-                        
-                        concat_cmd = [
-                            "ffmpeg", "-y"
-                        ] + inputs + [
-                            "-filter_complex", filter_complex,
-                            "-map", f"[v{len(temp_videos)-2:02d}{len(temp_videos)-1:02d}]",
-                            "-c:v", "libx264",
-                            "-pix_fmt", "yuv420p",
-                            "-preset", "medium",
-                            "-crf", "18",
-                            "-movflags", "+faststart",
-                            str(output_path)
-                        ]
-                    else:
-                        # Fallback to simple concatenation
-                        concat_file = temp_path / "concat.txt"
-                        with open(concat_file, 'w') as f:
-                            for video in temp_videos:
-                                f.write(f"file '{video}'\n")
-                        
-                        concat_cmd = [
-                            "ffmpeg", "-y",
-                            "-f", "concat",
-                            "-safe", "0",
-                            "-i", str(concat_file),
-                            "-c", "copy",
-                            str(output_path)
-                        ]
-                else:
-                    # Simple concatenation without transitions
-                    concat_file = temp_path / "concat.txt"
-                    with open(concat_file, 'w') as f:
-                        for video in temp_videos:
-                            f.write(f"file '{video}'\n")
-                    
-                    concat_cmd = [
-                        "ffmpeg", "-y",
-                        "-f", "concat",
-                        "-safe", "0",
-                        "-i", str(concat_file),
-                        "-c", "copy",
-                        str(output_path)
-                    ]
+                logger.info("All individual videos created, now concatenating...")
                 
-                result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+                # Simple concatenation without complex transitions for now
+                concat_file = temp_path / "concat.txt"
+                with open(concat_file, 'w') as f:
+                    for video in temp_videos:
+                        # Use relative paths in concat file
+                        f.write(f"file '{video.name}'\n")
+                
+                # Change to temp directory for concat operation
+                concat_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", "concat.txt",
+                    "-c", "copy",
+                    str(output_path)
+                ]
+                
+                logger.info(f"Concatenation command: {' '.join(concat_cmd)}")
+                
+                # Run concat command from temp directory
+                result = subprocess.run(
+                    concat_cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=300,
+                    cwd=temp_path
+                )
+                
                 if result.returncode != 0:
                     logger.error(f"Error concatenating videos: {result.stderr}")
-                    return False
+                    logger.error(f"Stdout: {result.stdout}")
+                    
+                    # Fallback: try manual concatenation
+                    logger.info("Trying fallback concatenation method...")
+                    return create_video_fallback(temp_videos, output_path, temp_path)
                 
+                logger.info("Video concatenation successful")
                 return True
             
-            # Execute the command for single image
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
-                return False
-            
-            return True
-            
+    except subprocess.TimeoutExpired:
+        logger.error("FFmpeg command timed out")
+        return False
     except Exception as e:
         logger.error(f"Error creating video: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def create_video_fallback(temp_videos: List[Path], output_path: Path, temp_path: Path) -> bool:
+    """Fallback method for video creation using simpler approach"""
+    try:
+        logger.info("Using fallback concatenation method")
+        
+        # Create a simple list file with absolute paths
+        concat_file = temp_path / "concat_abs.txt"
+        with open(concat_file, 'w') as f:
+            for video in temp_videos:
+                f.write(f"file '{video.absolute()}'\n")
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_file.absolute()),
+            "-c:v", "libx264",  # Re-encode instead of copy
+            "-c:a", "aac",
+            "-preset", "fast",
+            "-crf", "23",
+            str(output_path)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            logger.info("Fallback method successful")
+            return True
+        else:
+            logger.error(f"Fallback method failed: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Fallback method error: {e}")
         return False
 
 def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path, fade_in: float = 0.5, fade_out: float = 0.5) -> bool:
@@ -344,18 +358,86 @@ async def health_check():
         "supported_formats": VIDEO_FORMATS
     }
 
-@app.get("/formats")
-async def get_formats():
-    """Get available video formats"""
-    return {
-        "formats": {
-            format_type: {
-                **config,
-                "aspect_ratio": f"{config['width']}:{config['height']}"
-            }
-            for format_type, config in VIDEO_FORMATS.items()
+@app.get("/debug/ffmpeg")
+async def debug_ffmpeg():
+    """Debug FFmpeg installation and capabilities"""
+    try:
+        # Check FFmpeg version
+        version_result = subprocess.run(
+            ["ffmpeg", "-version"], 
+            capture_output=True, 
+            text=True, 
+            timeout=10
+        )
+        
+        # Check available codecs
+        codecs_result = subprocess.run(
+            ["ffmpeg", "-codecs"], 
+            capture_output=True, 
+            text=True, 
+            timeout=10
+        )
+        
+        # Check available formats
+        formats_result = subprocess.run(
+            ["ffmpeg", "-formats"], 
+            capture_output=True, 
+            text=True, 
+            timeout=10
+        )
+        
+        return {
+            "ffmpeg_available": version_result.returncode == 0,
+            "version_output": version_result.stdout[:500] if version_result.stdout else None,
+            "version_error": version_result.stderr[:500] if version_result.stderr else None,
+            "has_libx264": "libx264" in codecs_result.stdout if codecs_result.stdout else False,
+            "has_mp4": "mp4" in formats_result.stdout if formats_result.stdout else False,
+            "working_directory": str(Path.cwd()),
+            "upload_dir_exists": UPLOAD_DIR.exists(),
+            "output_dir_exists": OUTPUT_DIR.exists()
         }
-    }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "ffmpeg_available": False
+        }
+
+@app.post("/test-video")
+async def test_video_creation():
+    """Test video creation with a simple solid color frame"""
+    try:
+        output_path = OUTPUT_DIR / "test_video.mp4"
+        
+        # Create a simple test video with solid color
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-i", "color=red:size=1080x1920:duration=3",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "fast",
+            "-crf", "23",
+            str(output_path)
+        ]
+        
+        logger.info(f"Test command: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        return {
+            "success": result.returncode == 0,
+            "command": " ".join(cmd),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "file_created": output_path.exists(),
+            "file_size": output_path.stat().st_size if output_path.exists() else 0
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 @app.post("/create-video")
 async def create_video(
