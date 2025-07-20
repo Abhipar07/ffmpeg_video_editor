@@ -16,9 +16,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="FFmpeg Video Generator API",
-    description="Create videos from images with optional background music",
-    version="1.0.0"
+    title="FFmpeg Reel Video Generator API",
+    description="Create reel format videos from images with smooth transitions and optional background music",
+    version="2.0.0"
 )
 
 # Enable CORS
@@ -38,9 +38,13 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Configuration
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
-MAX_IMAGES = 10
+MAX_IMAGES = 30  # Increased from 10 to 30
 SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+
+# Reel format dimensions (9:16 aspect ratio)
+REEL_WIDTH = 1080
+REEL_HEIGHT = 1920
 
 def check_ffmpeg():
     """Check if FFmpeg is available"""
@@ -82,71 +86,52 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> None:
         logger.error(f"Error saving file: {e}")
         raise HTTPException(status_code=500, detail="Failed to save file")
 
-def create_video_from_images(
+def create_reel_video_with_transitions(
     image_paths: List[Path], 
     output_path: Path, 
-    duration_per_image: float = 2.0,
-    transition_duration: float = 0.5,
-    fps: int = 25
+    duration_per_image: float = 3.0,
+    transition_duration: float = 1.0,
+    transition_type: str = "crossfade",
+    fps: int = 30
 ) -> bool:
-    """Create video from images using FFmpeg"""
+    """Create reel format video from images with smooth transitions using FFmpeg"""
     try:
-        # Create a temporary directory for processed images
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            # Copy and rename images to sequential format
-            for i, img_path in enumerate(image_paths):
-                new_name = f"img_{i:04d}{img_path.suffix}"
-                shutil.copy2(img_path, temp_path / new_name)
-            
-            # FFmpeg command to create slideshow with crossfade transitions
+        if len(image_paths) == 1:
+            # Single image - create a short video
             cmd = [
-                "ffmpeg", "-y",  # Overwrite output file
-                "-framerate", f"1/{duration_per_image}",  # Input framerate
-                "-pattern_type", "glob",
-                "-i", str(temp_path / "img_*.jpg") if any(p.suffix.lower() in ['.jpg', '.jpeg'] for p in image_paths) else str(temp_path / "img_*.*"),
-                "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", str(image_paths[0]),
+                "-t", str(duration_per_image),
+                "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
-                "-preset", "fast",
-                "-crf", "23",
+                "-preset", "medium",
+                "-crf", "20",
                 str(output_path)
             ]
-            
-            # Alternative command for better compatibility
-            if len(image_paths) == 1:
-                # Single image - create a short video
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-loop", "1",
-                    "-i", str(image_paths[0]),
-                    "-t", str(duration_per_image * len(image_paths)),
-                    "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    "-preset", "fast",
-                    "-crf", "23",
-                    str(output_path)
-                ]
-            else:
-                # Multiple images - create slideshow
-                # First, create individual videos for each image
+        else:
+            # Multiple images - create slideshow with smooth transitions
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                
+                # Create individual videos for each image with proper scaling
                 temp_videos = []
                 for i, img_path in enumerate(image_paths):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
                     temp_videos.append(temp_video)
                     
+                    # Create individual video clip for each image
                     single_cmd = [
                         "ffmpeg", "-y",
                         "-loop", "1",
                         "-i", str(img_path),
-                        "-t", str(duration_per_image),
-                        "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps={fps}",
+                        "-t", str(duration_per_image + transition_duration),  # Add extra time for transition
+                        "-vf", f"scale={REEL_WIDTH}:{REEL_HEIGHT}:force_original_aspect_ratio=decrease,pad={REEL_WIDTH}:{REEL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,fps={fps}",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-preset", "fast",
-                        "-crf", "23",
+                        "-preset", "medium",
+                        "-crf", "20",
                         str(temp_video)
                     ]
                     
@@ -155,50 +140,99 @@ def create_video_from_images(
                         logger.error(f"Error creating video for image {i}: {result.stderr}")
                         return False
                 
-                # Create concat file
-                concat_file = temp_path / "concat.txt"
-                with open(concat_file, 'w') as f:
+                # Create complex filter for smooth transitions
+                if transition_type == "crossfade":
+                    # Build crossfade filter chain
+                    filter_complex = ""
+                    labels = []
+                    
+                    # Generate input labels
+                    for i in range(len(temp_videos)):
+                        labels.append(f"[{i}:v]")
+                    
+                    # Create crossfade chain
+                    current_label = labels[0]
+                    for i in range(1, len(labels)):
+                        if i == 1:
+                            filter_complex += f"{current_label}{labels[i]}xfade=transition=fade:duration={transition_duration}:offset={duration_per_image * (i-1) + duration_per_image - transition_duration}[v{i}];"
+                        else:
+                            filter_complex += f"[v{i-1}]{labels[i]}xfade=transition=fade:duration={transition_duration}:offset={duration_per_image * (i-1) + duration_per_image - transition_duration}[v{i}];"
+                        current_label = f"[v{i}]"
+                    
+                    # Remove the last semicolon
+                    filter_complex = filter_complex.rstrip(';')
+                    
+                    # Create input list for ffmpeg
+                    input_args = []
                     for video in temp_videos:
-                        f.write(f"file '{video}'\n")
+                        input_args.extend(["-i", str(video)])
+                    
+                    # Final command with crossfade
+                    final_cmd = [
+                        "ffmpeg", "-y"
+                    ] + input_args + [
+                        "-filter_complex", filter_complex,
+                        "-map", f"[v{len(labels)-1}]",
+                        "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-preset", "medium",
+                        "-crf", "20",
+                        str(output_path)
+                    ]
+                    
+                else:
+                    # Fallback to simple concatenation for other transition types
+                    concat_file = temp_path / "concat.txt"
+                    with open(concat_file, 'w') as f:
+                        for video in temp_videos:
+                            f.write(f"file '{video}'\n")
+                    
+                    final_cmd = [
+                        "ffmpeg", "-y",
+                        "-f", "concat",
+                        "-safe", "0",
+                        "-i", str(concat_file),
+                        "-c", "copy",
+                        str(output_path)
+                    ]
                 
-                # Concatenate videos
-                concat_cmd = [
-                    "ffmpeg", "-y",
-                    "-f", "concat",
-                    "-safe", "0",
-                    "-i", str(concat_file),
-                    "-c", "copy",
-                    str(output_path)
-                ]
-                
-                result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+                # Execute final command
+                result = subprocess.run(final_cmd, capture_output=True, text=True, timeout=600)
                 if result.returncode != 0:
-                    logger.error(f"Error concatenating videos: {result.stderr}")
+                    logger.error(f"Error creating final video: {result.stderr}")
                     return False
                 
                 return True
-            
-            # Execute the command for single image
+        
+        # Execute single image command
+        if len(image_paths) == 1:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
                 logger.error(f"FFmpeg error: {result.stderr}")
                 return False
-            
-            return True
+        
+        return True
             
     except Exception as e:
-        logger.error(f"Error creating video: {e}")
+        logger.error(f"Error creating reel video: {e}")
         return False
 
-def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) -> bool:
-    """Add audio track to video"""
+def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path, fade_audio: bool = True) -> bool:
+    """Add audio track to video with optional fade effects"""
     try:
+        # Build audio filter for smooth fade in/out
+        audio_filter = "volume=0.8"  # Slightly lower volume
+        if fade_audio:
+            audio_filter += ",afade=t=in:ss=0:d=1,afade=t=out:st=-1:d=1"  # 1 second fade in/out
+        
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
             "-i", str(audio_path),
             "-c:v", "copy",
             "-c:a", "aac",
+            "-b:a", "128k",
+            "-af", audio_filter,
             "-shortest",  # End when shortest stream ends
             "-map", "0:v:0",  # Video from first input
             "-map", "1:a:0",  # Audio from second input
@@ -220,10 +254,12 @@ async def root():
     """API health check"""
     ffmpeg_available = check_ffmpeg()
     return {
-        "message": "FFmpeg Video Generator API",
+        "message": "FFmpeg Reel Video Generator API",
         "status": "running",
         "ffmpeg_available": ffmpeg_available,
-        "version": "1.0.0"
+        "version": "2.0.0",
+        "max_images": MAX_IMAGES,
+        "output_format": f"{REEL_WIDTH}x{REEL_HEIGHT} (9:16 reel format)"
     }
 
 @app.get("/health")
@@ -233,18 +269,22 @@ async def health_check():
         "status": "healthy",
         "ffmpeg": check_ffmpeg(),
         "upload_dir": UPLOAD_DIR.exists(),
-        "output_dir": OUTPUT_DIR.exists()
+        "output_dir": OUTPUT_DIR.exists(),
+        "max_images_supported": MAX_IMAGES,
+        "reel_dimensions": f"{REEL_WIDTH}x{REEL_HEIGHT}"
     }
 
-@app.post("/create-video")
-async def create_video(
-    images: List[UploadFile] = File(..., description="List of image files"),
+@app.post("/create-reel")
+async def create_reel_video(
+    images: List[UploadFile] = File(..., description="List of image files (max 30)"),
     audio: Optional[UploadFile] = File(None, description="Optional audio file"),
-    duration_per_image: float = Form(2.0, description="Duration per image in seconds"),
-    transition_duration: float = Form(0.5, description="Transition duration in seconds"),
-    fps: int = Form(25, description="Output video FPS")
+    duration_per_image: float = Form(3.0, description="Duration per image in seconds"),
+    transition_duration: float = Form(1.0, description="Transition duration in seconds"),
+    transition_type: str = Form("crossfade", description="Transition type (crossfade, fade, etc.)"),
+    fps: int = Form(30, description="Output video FPS"),
+    fade_audio: bool = Form(True, description="Apply fade in/out to audio")
 ):
-    """Create video from uploaded images with optional audio"""
+    """Create reel format video from uploaded images with smooth transitions and optional audio"""
     
     # Check FFmpeg availability
     if not check_ffmpeg():
@@ -256,6 +296,12 @@ async def create_video(
     
     if len(images) > MAX_IMAGES:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_IMAGES} images allowed")
+    
+    if duration_per_image < 1.0:
+        raise HTTPException(status_code=400, detail="Duration per image must be at least 1 second")
+    
+    if transition_duration < 0.1 or transition_duration > duration_per_image:
+        raise HTTPException(status_code=400, detail="Transition duration must be between 0.1s and duration_per_image")
     
     # Generate unique ID for this request
     request_id = str(uuid.uuid4())
@@ -291,27 +337,28 @@ async def create_video(
             await save_upload_file(audio, audio_path)
         
         # Create output video
-        output_filename = f"video_{request_id}.mp4"
+        output_filename = f"reel_{request_id}.mp4"
         temp_video_path = OUTPUT_DIR / f"temp_{output_filename}"
         final_video_path = OUTPUT_DIR / output_filename
         
-        # Generate video from images
-        success = create_video_from_images(
+        # Generate reel video from images
+        success = create_reel_video_with_transitions(
             image_paths, 
             temp_video_path if audio_path else final_video_path,
             duration_per_image,
             transition_duration,
+            transition_type,
             fps
         )
         
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to create video from images")
+            raise HTTPException(status_code=500, detail="Failed to create reel video from images")
         
         # Add audio if provided
         if audio_path:
-            success = add_audio_to_video(temp_video_path, audio_path, final_video_path)
+            success = add_audio_to_video(temp_video_path, audio_path, final_video_path, fade_audio)
             if not success:
-                raise HTTPException(status_code=500, detail="Failed to add audio to video")
+                raise HTTPException(status_code=500, detail="Failed to add audio to reel video")
             
             # Clean up temp video
             if temp_video_path.exists():
@@ -321,16 +368,28 @@ async def create_video(
         shutil.rmtree(request_dir, ignore_errors=True)
         
         if not final_video_path.exists():
-            raise HTTPException(status_code=500, detail="Video file was not created")
+            raise HTTPException(status_code=500, detail="Reel video file was not created")
+        
+        # Calculate total video duration
+        total_duration = len(image_paths) * duration_per_image - (len(image_paths) - 1) * transition_duration if len(image_paths) > 1 else duration_per_image
         
         # Return success response
         return {
-            "message": "Video created successfully",
+            "message": "Reel video created successfully",
             "video_id": request_id,
             "download_url": f"/download/{output_filename}",
             "file_size": final_video_path.stat().st_size,
             "images_processed": len(image_paths),
-            "audio_added": audio_path is not None
+            "audio_added": audio_path is not None,
+            "video_specs": {
+                "format": "MP4",
+                "resolution": f"{REEL_WIDTH}x{REEL_HEIGHT}",
+                "aspect_ratio": "9:16",
+                "fps": fps,
+                "duration": f"{total_duration:.1f}s",
+                "transition_type": transition_type,
+                "transition_duration": transition_duration
+            }
         }
         
     except HTTPException:
@@ -345,7 +404,7 @@ async def create_video(
 
 @app.get("/download/{filename}")
 async def download_video(filename: str):
-    """Download generated video"""
+    """Download generated reel video"""
     file_path = OUTPUT_DIR / filename
     
     if not file_path.exists():
@@ -359,28 +418,42 @@ async def download_video(filename: str):
 
 @app.delete("/cleanup/{video_id}")
 async def cleanup_video(video_id: str):
-    """Clean up generated video file"""
-    file_path = OUTPUT_DIR / f"video_{video_id}.mp4"
+    """Clean up generated reel video file"""
+    file_path = OUTPUT_DIR / f"reel_{video_id}.mp4"
     
     if file_path.exists():
         file_path.unlink()
-        return {"message": "Video deleted successfully"}
+        return {"message": "Reel video deleted successfully"}
     else:
-        raise HTTPException(status_code=404, detail="Video not found")
+        raise HTTPException(status_code=404, detail="Reel video not found")
 
-@app.get("/list-videos")
-async def list_videos():
-    """List all generated videos"""
+@app.get("/list-reels")
+async def list_reel_videos():
+    """List all generated reel videos"""
     videos = []
-    for file_path in OUTPUT_DIR.glob("video_*.mp4"):
+    for file_path in OUTPUT_DIR.glob("reel_*.mp4"):
         videos.append({
             "filename": file_path.name,
             "size": file_path.stat().st_size,
             "created": file_path.stat().st_ctime,
-            "download_url": f"/download/{file_path.name}"
+            "download_url": f"/download/{file_path.name}",
+            "format": "9:16 Reel"
         })
     
-    return {"videos": videos, "count": len(videos)}
+    return {"reel_videos": videos, "count": len(videos)}
+
+@app.get("/supported-transitions")
+async def get_supported_transitions():
+    """Get list of supported transition types"""
+    return {
+        "transitions": [
+            {"name": "crossfade", "description": "Smooth crossfade between images"},
+            {"name": "fade", "description": "Fade to black between images"},
+            {"name": "none", "description": "No transition (direct cut)"}
+        ],
+        "default": "crossfade",
+        "recommended_duration": "0.5-2.0 seconds"
+    }
 
 if __name__ == "__main__":
     import uvicorn
