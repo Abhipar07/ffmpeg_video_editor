@@ -147,12 +147,18 @@ def create_video_from_images(
                 return True
 
             else:
-                # Multiple images - create smooth crossfade slideshow
+                # Multiple images - create smooth crossfade slideshow with correct timing
                 logger.info("Creating portrait slideshow with smooth crossfade transitions")
 
-                # Create individual videos for each image (longer duration for overlap)
+                # Calculate correct total duration: (num_images * duration) - ((num_images - 1) * transition_duration)
+                # This accounts for overlapping transitions
+                total_duration = (len(image_paths) * duration_per_image) - ((len(image_paths) - 1) * transition_duration)
+                logger.info(f"Expected total video duration: {total_duration} seconds")
+
+                # Create individual videos for each image with correct duration
                 temp_videos = []
-                video_duration = duration_per_image + transition_duration  # Extra time for crossfade
+                # Each video needs to be long enough to allow for crossfade
+                individual_video_duration = duration_per_image + transition_duration
 
                 for i, img_path in enumerate(image_paths):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
@@ -161,7 +167,7 @@ def create_video_from_images(
                     single_cmd = [
                         "ffmpeg", "-y",
                         "-loop", "1",
-                        "-t", str(video_duration),
+                        "-t", str(individual_video_duration),
                         "-i", str(img_path),
                         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
                         "-c:v", "libx264",
@@ -185,7 +191,7 @@ def create_video_from_images(
 
                     logger.info(f"Created temp video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
 
-                # Create crossfade slideshow using xfade filter
+                # Create crossfade slideshow using xfade filter with correct offsets
                 if len(temp_videos) == 2:
                     # Two videos - simple crossfade
                     crossfade_cmd = [
@@ -193,7 +199,7 @@ def create_video_from_images(
                         "-i", str(temp_videos[0]),
                         "-i", str(temp_videos[1]),
                         "-filter_complex",
-                        f"[0][1]xfade=transition=fade:duration={transition_duration}:offset={duration_per_image}",
+                        f"[0][1]xfade=transition=fade:duration={transition_duration}:offset={duration_per_image - transition_duration}",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
                         "-preset", "ultrafast",
@@ -202,17 +208,19 @@ def create_video_from_images(
                         str(output_path)
                     ]
                 else:
-                    # Multiple videos - chain crossfades
+                    # Multiple videos - chain crossfades with correct timing
                     filter_parts = []
                     current_label = "0"
 
                     for i in range(1, len(temp_videos)):
-                        offset = duration_per_image * i
+                        # Correct offset calculation: each transition starts when previous image should fade out
+                        offset = (duration_per_image - transition_duration) * i
                         next_label = f"v{i}"
                         filter_parts.append(f"[{current_label}][{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}[{next_label}]")
                         current_label = next_label
 
                     filter_complex = ";".join(filter_parts)
+                    logger.info(f"Crossfade filter: {filter_complex}")
 
                     crossfade_cmd = [
                         "ffmpeg", "-y"
@@ -239,7 +247,7 @@ def create_video_from_images(
                 if result.returncode != 0:
                     logger.error(f"Crossfade creation failed: {result.stderr}")
 
-                    # Fallback to individual fade approach with longer durations
+                    # Fallback to individual fade approach with correct timing
                     logger.info("Falling back to individual fade approach")
                     temp_fade_videos = []
 
@@ -247,20 +255,23 @@ def create_video_from_images(
                         fade_video = temp_path / f"fade_{i:04d}.mp4"
                         temp_fade_videos.append(fade_video)
 
-                        # Create fade effects based on position
+                        # Create fade effects based on position with correct timing
                         fade_filter = f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
 
                         if i == 0:  # First image - fade in only
                             fade_filter += f",fade=t=in:st=0:d={transition_duration}"
+                            video_duration = duration_per_image
                         elif i == len(image_paths) - 1:  # Last image - fade out only
                             fade_filter += f",fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}"
-                        else:  # Middle images - both fades
+                            video_duration = duration_per_image
+                        else:  # Middle images - both fades with reduced duration to account for overlaps
                             fade_filter += f",fade=t=in:st=0:d={transition_duration},fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}"
+                            video_duration = duration_per_image
 
                         fade_cmd = [
                             "ffmpeg", "-y",
                             "-loop", "1",
-                            "-t", str(duration_per_image),
+                            "-t", str(video_duration),
                             "-i", str(img_path),
                             "-vf", fade_filter,
                             "-c:v", "libx264",
