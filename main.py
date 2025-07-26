@@ -107,14 +107,19 @@ def create_video_from_images(
             logger.info(f"Using temp directory: {temp_path}")
 
             if len(image_paths) == 1:
-                # Single image - create a portrait video with most compatible settings
-                logger.info("Creating portrait video from single image")
+                # Single image - create a portrait video with fade in/out effects
+                logger.info("Creating portrait video from single image with fade effects")
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
-                    "-t", str(duration_per_image),
+                    "-t", str(duration_per_image + transition_duration * 2),  # Add time for fade in/out
                     "-i", str(image_paths[0]),
-                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+                    "-vf", (
+                        f"scale=1080:1920:force_original_aspect_ratio=decrease,"
+                        f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                        f"fade=in:0:{int(fps * transition_duration)},"
+                        f"fade=out:{int(fps * duration_per_image)}:{int(fps * transition_duration)}"
+                    ),
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
                     "-preset", "ultrafast",
@@ -131,26 +136,7 @@ def create_video_from_images(
                 if result.returncode != 0:
                     logger.error(f"FFmpeg error (return code {result.returncode}): {result.stderr}")
                     logger.error(f"FFmpeg stdout: {result.stdout}")
-
-                    # Try alternative approach with simpler command
-                    logger.info("Trying alternative simpler FFmpeg command")
-                    simple_cmd = [
-                        "ffmpeg", "-y",
-                        "-loop", "1",
-                        "-t", str(duration_per_image),
-                        "-i", str(image_paths[0]),
-                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
-                        "-c:v", "libx264",
-                        "-preset", "ultrafast",
-                        "-pix_fmt", "yuv420p",
-                        "-f", "mp4",
-                        str(output_path)
-                    ]
-
-                    result = subprocess.run(simple_cmd, capture_output=True, text=True, timeout=180)
-                    if result.returncode != 0:
-                        logger.error(f"Simple FFmpeg also failed: {result.stderr}")
-                        return False
+                    return False
 
                 # Check output file size
                 if not output_path.exists() or output_path.stat().st_size < 1000:
@@ -161,85 +147,129 @@ def create_video_from_images(
                 return True
 
             else:
-                # Multiple images - create portrait slideshow with improved approach
-                logger.info("Creating portrait slideshow from multiple images")
+                # Multiple images - create portrait slideshow with crossfade transitions
+                logger.info("Creating portrait slideshow with crossfade transitions")
 
-                # Try a different approach - create input list for concat demuxer
-                input_list = temp_path / "input_list.txt"
-                with open(input_list, 'w') as f:
-                    for img_path in image_paths:
-                        f.write(f"file '{img_path}'\n")
-                        f.write(f"duration {duration_per_image}\n")
-                    # Repeat last image to ensure proper duration
-                    f.write(f"file '{image_paths[-1]}'\n")
+                # Create individual videos for each image with proper duration for crossfading
+                temp_videos = []
+                for i, img_path in enumerate(image_paths):
+                    temp_video = temp_path / f"video_{i:04d}.mp4"
+                    temp_videos.append(temp_video)
 
-                logger.info(f"Created input list with {len(image_paths)} images")
+                    # Calculate duration: base duration + transition time
+                    video_duration = duration_per_image
+                    if i == 0:  # First image gets fade in
+                        video_duration += transition_duration
+                    if i == len(image_paths) - 1:  # Last image gets fade out
+                        video_duration += transition_duration
 
-                # Create slideshow directly
-                slideshow_cmd = [
-                    "ffmpeg", "-y",
-                    "-f", "concat",
-                    "-safe", "0",
-                    "-i", str(input_list),
-                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    "-preset", "ultrafast",
-                    "-crf", "28",
-                    "-r", str(fps),
-                    "-movflags", "+faststart",
-                    "-an",
-                    str(output_path)
-                ]
+                    single_cmd = [
+                        "ffmpeg", "-y",
+                        "-loop", "1",
+                        "-t", str(video_duration),
+                        "-i", str(img_path),
+                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+                        "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-preset", "ultrafast",
+                        "-crf", "28",
+                        "-r", str(fps),
+                        "-an",
+                        str(temp_video)
+                    ]
 
-                logger.info(f"Creating slideshow: {' '.join(slideshow_cmd)}")
-                result = subprocess.run(slideshow_cmd, capture_output=True, text=True, timeout=300)
+                    logger.info(f"Creating video {i+1}/{len(image_paths)} for crossfade")
+                    result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=90)
+                    if result.returncode != 0:
+                        logger.error(f"Error creating video for image {i}: {result.stderr}")
+                        return False
+
+                    if not temp_video.exists() or temp_video.stat().st_size < 1000:
+                        logger.error(f"Temp video was not created or is too small: {temp_video}")
+                        return False
+
+                    logger.info(f"Created temp video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
+
+                # Create complex FFmpeg filter for crossfade transitions
+                if len(temp_videos) == 2:
+                    # Simple case: two videos with crossfade
+                    crossfade_cmd = [
+                        "ffmpeg", "-y",
+                        "-i", str(temp_videos[0]),
+                        "-i", str(temp_videos[1]),
+                        "-filter_complex", (
+                            f"[0]fade=out:{int(fps * duration_per_image)}:{int(fps * transition_duration)}[v0];"
+                            f"[1]fade=in:0:{int(fps * transition_duration)}[v1];"
+                            f"[v0][v1]overlay=0:0"
+                        ),
+                        "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-preset", "ultrafast",
+                        "-crf", "28",
+                        "-movflags", "+faststart",
+                        str(output_path)
+                    ]
+                else:
+                    # Multiple videos: create crossfade chain
+                    filter_complex = []
+                    overlay_inputs = []
+
+                    # Add fade effects to first and last videos
+                    filter_complex.append(f"[0]fade=in:0:{int(fps * transition_duration)}[v0fade]")
+                    filter_complex.append(f"[{len(temp_videos)-1}]fade=out:{int(fps * duration_per_image)}:{int(fps * transition_duration)}[v{len(temp_videos)-1}fade]")
+
+                    # Create crossfade transitions between consecutive videos
+                    for i in range(len(temp_videos) - 1):
+                        if i == 0:
+                            input1 = "v0fade"
+                        else:
+                            input1 = f"v{i}"
+
+                        if i == len(temp_videos) - 2:  # Last transition
+                            input2 = f"v{i+1}fade"
+                        else:
+                            input2 = f"{i+1}"
+
+                        # Calculate crossfade timing
+                        fade_start = int(fps * (duration_per_image - transition_duration))
+
+                        filter_complex.append(
+                            f"[{input1}][{input2}]xfade=transition=fade:duration={transition_duration}:offset={duration_per_image - transition_duration}[v{i+1}]"
+                        )
+
+                    crossfade_cmd = [
+                        "ffmpeg", "-y"
+                    ]
+
+                    # Add all input videos
+                    for video in temp_videos:
+                        crossfade_cmd.extend(["-i", str(video)])
+
+                    crossfade_cmd.extend([
+                        "-filter_complex", ";".join(filter_complex),
+                        "-map", f"[v{len(temp_videos)-1}]",
+                        "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-preset", "ultrafast",
+                        "-crf", "28",
+                        "-movflags", "+faststart",
+                        str(output_path)
+                    ])
+
+                logger.info(f"Creating video with crossfade transitions")
+                result = subprocess.run(crossfade_cmd, capture_output=True, text=True, timeout=300)
 
                 if result.returncode != 0:
-                    logger.error(f"Slideshow creation failed: {result.stderr}")
+                    logger.error(f"Crossfade creation failed: {result.stderr}")
 
-                    # Fallback to individual video creation method
-                    logger.info("Falling back to individual video creation method")
-                    temp_videos = []
-                    for i, img_path in enumerate(image_paths):
-                        temp_video = temp_path / f"video_{i:04d}.mp4"
-                        temp_videos.append(temp_video)
-
-                        single_cmd = [
-                            "ffmpeg", "-y",
-                            "-loop", "1",
-                            "-t", str(duration_per_image),
-                            "-i", str(img_path),
-                            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-                            "-c:v", "libx264",
-                            "-pix_fmt", "yuv420p",
-                            "-preset", "ultrafast",
-                            "-crf", "28",
-                            "-r", str(fps),
-                            "-an",
-                            str(temp_video)
-                        ]
-
-                        logger.info(f"Creating portrait video {i+1}/{len(image_paths)}")
-                        result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=90)
-                        if result.returncode != 0:
-                            logger.error(f"Error creating video for image {i}: {result.stderr}")
-                            return False
-
-                        if not temp_video.exists() or temp_video.stat().st_size < 1000:
-                            logger.error(f"Temp video was not created or is too small: {temp_video}")
-                            return False
-
-                        logger.info(f"Created temp portrait video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
-
-                    # Create concat file for final merge
+                    # Fallback to simple concatenation without transitions
+                    logger.info("Falling back to simple concatenation")
                     concat_file = temp_path / "concat.txt"
                     with open(concat_file, 'w') as f:
                         for video in temp_videos:
                             video_path = str(video).replace('\\', '/')
                             f.write(f"file '{video_path}'\n")
 
-                    # Concatenate videos
                     concat_cmd = [
                         "ffmpeg", "-y",
                         "-f", "concat",
@@ -261,7 +291,7 @@ def create_video_from_images(
                     logger.error("Output video file is empty or too small after processing.")
                     return False
 
-                logger.info(f"Portrait slideshow video created successfully: {output_path.stat().st_size} bytes")
+                logger.info(f"Portrait slideshow with transitions created successfully: {output_path.stat().st_size} bytes")
                 return True
 
     except subprocess.TimeoutExpired as e:
