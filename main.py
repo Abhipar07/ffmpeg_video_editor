@@ -266,7 +266,8 @@ def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) ->
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "128k",
-            "-shortest",  # End when shortest stream ends
+            "-stream_loop", "-1",  # Loop audio indefinitely
+            "-shortest",  # End when video (longest stream) ends
             "-map", "0:v:0",  # Video from first input
             "-map", "1:a:0",  # Audio from second input
             "-movflags", "+faststart",
