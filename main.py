@@ -262,11 +262,11 @@ def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) ->
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
+            "-stream_loop", "-1",  # Loop audio indefinitely - moved before audio input
             "-i", str(audio_path),
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "128k",
-            "-stream_loop", "-1",  # Loop audio indefinitely
             "-shortest",  # End when video (longest stream) ends
             "-map", "0:v:0",  # Video from first input
             "-map", "1:a:0",  # Audio from second input
