@@ -162,11 +162,13 @@ def create_video_from_images(
                     # Create fade effects based on position
                     fade_filters = []
 
-                    # Add fade in for first image or fade in + out for others
-                    if i == 0:  # First image - fade in only
+                    # All images should have both fade in and fade out for smooth transitions
+                    if i == 0:  # First image - fade in + fade out
                         fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
+                        fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
                         video_duration = duration_per_image
-                    elif i == len(image_paths) - 1:  # Last image - fade out only
+                    elif i == len(image_paths) - 1:  # Last image - fade in + fade out
+                        fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
                         fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
                         video_duration = duration_per_image
                     else:  # Middle images - both fades
