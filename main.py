@@ -107,20 +107,27 @@ def create_video_from_images(
             logger.info(f"Using temp directory: {temp_path}")
 
             if len(image_paths) == 1:
-                # Single image - create a short video
-                logger.info("Creating video from single image")
+                # Single image - create a portrait video
+                logger.info("Creating portrait video from single image")
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-i", str(image_paths[0]),
                     "-t", str(duration_per_image),
-                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+                    "-vf", (
+                        "scale=1080:1920:force_original_aspect_ratio=increase,"
+                        "crop=1080:1920,"
+                        "setsar=1,"
+                        "format=yuv420p"
+                    ),
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
-                    "-preset", "fast",
+                    "-preset", "medium",
                     "-crf", "23",
                     "-r", str(fps),
                     "-movflags", "+faststart",
+                    "-profile:v", "baseline",
+                    "-level", "3.0",
                     str(output_path)
                 ]
 
@@ -137,12 +144,12 @@ def create_video_from_images(
                     logger.error("Output video file is empty or too small.")
                     return False
 
-                logger.info("Single image video created successfully")
+                logger.info("Single image portrait video created successfully")
                 return True
 
             else:
-                # Multiple images - create slideshow
-                logger.info("Creating slideshow from multiple images")
+                # Multiple images - create portrait slideshow
+                logger.info("Creating portrait slideshow from multiple images")
 
                 # Copy and rename images to sequential format
                 copied_images = []
@@ -153,7 +160,7 @@ def create_video_from_images(
                     copied_images.append(dest_path)
                     logger.info(f"Copied {img_path} to {dest_path}")
 
-                # Create individual videos for each image
+                # Create individual portrait videos for each image
                 temp_videos = []
                 for i, img_path in enumerate(copied_images):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
@@ -164,16 +171,23 @@ def create_video_from_images(
                         "-loop", "1",
                         "-i", str(img_path),
                         "-t", str(duration_per_image),
-                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+                        "-vf", (
+                            "scale=1080:1920:force_original_aspect_ratio=increase,"
+                            "crop=1080:1920,"
+                            "setsar=1,"
+                            "format=yuv420p"
+                        ),
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-preset", "fast",
+                        "-preset", "medium",
                         "-crf", "23",
                         "-r", str(fps),
+                        "-profile:v", "baseline",
+                        "-level", "3.0",
                         str(temp_video)
                     ]
 
-                    logger.info(f"Creating video {i+1}/{len(copied_images)}: {' '.join(single_cmd)}")
+                    logger.info(f"Creating portrait video {i+1}/{len(copied_images)}: {' '.join(single_cmd)}")
                     result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=120)
                     if result.returncode != 0:
                         logger.error(f"Error creating video for image {i}: {result.stderr}")
@@ -184,7 +198,7 @@ def create_video_from_images(
                         logger.error(f"Temp video was not created or is too small: {temp_video}")
                         return False
 
-                    logger.info(f"Created temp video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
+                    logger.info(f"Created temp portrait video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
 
                 # Create concat file with absolute paths
                 concat_file = temp_path / "concat.txt"
@@ -205,7 +219,7 @@ def create_video_from_images(
                     str(output_path)
                 ]
 
-                logger.info(f"Concatenating videos: {' '.join(concat_cmd)}")
+                logger.info(f"Concatenating portrait videos: {' '.join(concat_cmd)}")
                 result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode != 0:
                     logger.error(f"Error concatenating videos: {result.stderr}")
@@ -217,7 +231,7 @@ def create_video_from_images(
                     logger.error("Output video file is empty or too small after concat.")
                     return False
 
-                logger.info("Slideshow video created successfully")
+                logger.info("Portrait slideshow video created successfully")
                 return True
 
     except subprocess.TimeoutExpired as e:
@@ -238,9 +252,11 @@ def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) ->
             "-i", str(audio_path),
             "-c:v", "copy",
             "-c:a", "aac",
+            "-b:a", "128k",
             "-shortest",  # End when shortest stream ends
             "-map", "0:v:0",  # Video from first input
             "-map", "1:a:0",  # Audio from second input
+            "-movflags", "+faststart",
             str(output_path)
         ]
 
