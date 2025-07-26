@@ -107,7 +107,7 @@ def create_video_from_images(
             logger.info(f"Using temp directory: {temp_path}")
 
             if len(image_paths) == 1:
-                # Single image - create a portrait video using Stack Overflow solution
+                # Single image - create a portrait video with most compatible settings
                 logger.info("Creating portrait video from single image")
                 cmd = [
                     "ffmpeg", "-y",
@@ -116,21 +116,41 @@ def create_video_from_images(
                     "-i", str(image_paths[0]),
                     "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
                     "-c:v", "libx264",
-                    "-pix_fmt", "yuvj422p",
-                    "-preset", "medium",
-                    "-crf", "23",
+                    "-pix_fmt", "yuv420p",
+                    "-preset", "ultrafast",
+                    "-crf", "28",
                     "-r", str(fps),
                     "-movflags", "+faststart",
+                    "-an",  # No audio stream
                     str(output_path)
                 ]
 
                 logger.info(f"FFmpeg command: {' '.join(cmd)}")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
 
                 if result.returncode != 0:
                     logger.error(f"FFmpeg error (return code {result.returncode}): {result.stderr}")
                     logger.error(f"FFmpeg stdout: {result.stdout}")
-                    return False
+
+                    # Try alternative approach with simpler command
+                    logger.info("Trying alternative simpler FFmpeg command")
+                    simple_cmd = [
+                        "ffmpeg", "-y",
+                        "-loop", "1",
+                        "-t", str(duration_per_image),
+                        "-i", str(image_paths[0]),
+                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p",
+                        "-f", "mp4",
+                        str(output_path)
+                    ]
+
+                    result = subprocess.run(simple_cmd, capture_output=True, text=True, timeout=180)
+                    if result.returncode != 0:
+                        logger.error(f"Simple FFmpeg also failed: {result.stderr}")
+                        return False
 
                 # Check output file size
                 if not output_path.exists() or output_path.stat().st_size < 1000:
@@ -141,72 +161,104 @@ def create_video_from_images(
                 return True
 
             else:
-                # Multiple images - create portrait slideshow using Stack Overflow solution
+                # Multiple images - create portrait slideshow with improved approach
                 logger.info("Creating portrait slideshow from multiple images")
 
-                # Create individual portrait videos for each image
-                temp_videos = []
-                for i, img_path in enumerate(image_paths):
-                    temp_video = temp_path / f"video_{i:04d}.mp4"
-                    temp_videos.append(temp_video)
+                # Try a different approach - create input list for concat demuxer
+                input_list = temp_path / "input_list.txt"
+                with open(input_list, 'w') as f:
+                    for img_path in image_paths:
+                        f.write(f"file '{img_path}'\n")
+                        f.write(f"duration {duration_per_image}\n")
+                    # Repeat last image to ensure proper duration
+                    f.write(f"file '{image_paths[-1]}'\n")
 
-                    single_cmd = [
-                        "ffmpeg", "-y",
-                        "-loop", "1",
-                        "-t", str(duration_per_image),
-                        "-i", str(img_path),
-                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuvj422p",
-                        "-preset", "medium",
-                        "-crf", "23",
-                        "-r", str(fps),
-                        str(temp_video)
-                    ]
+                logger.info(f"Created input list with {len(image_paths)} images")
 
-                    logger.info(f"Creating portrait video {i+1}/{len(image_paths)}")
-                    result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=120)
-                    if result.returncode != 0:
-                        logger.error(f"Error creating video for image {i}: {result.stderr}")
-                        return False
-
-                    if not temp_video.exists() or temp_video.stat().st_size < 1000:
-                        logger.error(f"Temp video was not created or is too small: {temp_video}")
-                        return False
-
-                    logger.info(f"Created temp portrait video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
-
-                # Create concat file
-                concat_file = temp_path / "concat.txt"
-                with open(concat_file, 'w') as f:
-                    for video in temp_videos:
-                        # Use forward slashes for cross-platform compatibility
-                        video_path = str(video).replace('\\', '/')
-                        f.write(f"file '{video_path}'\n")
-
-                logger.info(f"Created concat file with {len(temp_videos)} videos")
-
-                # Concatenate videos with stream copy for faster processing
-                concat_cmd = [
+                # Create slideshow directly
+                slideshow_cmd = [
                     "ffmpeg", "-y",
                     "-f", "concat",
                     "-safe", "0",
-                    "-i", str(concat_file),
-                    "-c", "copy",
-                    "-avoid_negative_ts", "make_zero",
+                    "-i", str(input_list),
+                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-preset", "ultrafast",
+                    "-crf", "28",
+                    "-r", str(fps),
                     "-movflags", "+faststart",
+                    "-an",
                     str(output_path)
                 ]
 
-                logger.info(f"Concatenating portrait videos")
-                result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+                logger.info(f"Creating slideshow: {' '.join(slideshow_cmd)}")
+                result = subprocess.run(slideshow_cmd, capture_output=True, text=True, timeout=300)
+
                 if result.returncode != 0:
-                    logger.error(f"Error concatenating videos: {result.stderr}")
-                    return False
+                    logger.error(f"Slideshow creation failed: {result.stderr}")
+
+                    # Fallback to individual video creation method
+                    logger.info("Falling back to individual video creation method")
+                    temp_videos = []
+                    for i, img_path in enumerate(image_paths):
+                        temp_video = temp_path / f"video_{i:04d}.mp4"
+                        temp_videos.append(temp_video)
+
+                        single_cmd = [
+                            "ffmpeg", "-y",
+                            "-loop", "1",
+                            "-t", str(duration_per_image),
+                            "-i", str(img_path),
+                            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+                            "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p",
+                            "-preset", "ultrafast",
+                            "-crf", "28",
+                            "-r", str(fps),
+                            "-an",
+                            str(temp_video)
+                        ]
+
+                        logger.info(f"Creating portrait video {i+1}/{len(image_paths)}")
+                        result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=90)
+                        if result.returncode != 0:
+                            logger.error(f"Error creating video for image {i}: {result.stderr}")
+                            return False
+
+                        if not temp_video.exists() or temp_video.stat().st_size < 1000:
+                            logger.error(f"Temp video was not created or is too small: {temp_video}")
+                            return False
+
+                        logger.info(f"Created temp portrait video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
+
+                    # Create concat file for final merge
+                    concat_file = temp_path / "concat.txt"
+                    with open(concat_file, 'w') as f:
+                        for video in temp_videos:
+                            video_path = str(video).replace('\\', '/')
+                            f.write(f"file '{video_path}'\n")
+
+                    # Concatenate videos
+                    concat_cmd = [
+                        "ffmpeg", "-y",
+                        "-f", "concat",
+                        "-safe", "0",
+                        "-i", str(concat_file),
+                        "-c", "copy",
+                        "-movflags", "+faststart",
+                        str(output_path)
+                    ]
+
+                    logger.info(f"Concatenating portrait videos")
+                    result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=180)
+                    if result.returncode != 0:
+                        logger.error(f"Error concatenating videos: {result.stderr}")
+                        return False
 
                 # Check output file size
                 if not output_path.exists() or output_path.stat().st_size < 1000:
-                    logger.error("Output video file is empty or too small after concat.")
+                    logger.error("Output video file is empty or too small after processing.")
                     return False
 
                 logger.info(f"Portrait slideshow video created successfully: {output_path.stat().st_size} bytes")
