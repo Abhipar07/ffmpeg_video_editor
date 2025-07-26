@@ -107,7 +107,7 @@ def create_video_from_images(
             logger.info(f"Using temp directory: {temp_path}")
 
             if len(image_paths) == 1:
-                # Single image - create a portrait video with improved filter chain
+                # Single image - create a portrait video with fixed filter chain
                 logger.info("Creating portrait video from single image")
                 cmd = [
                     "ffmpeg", "-y",
@@ -115,9 +115,10 @@ def create_video_from_images(
                     "-t", str(duration_per_image),
                     "-i", str(image_paths[0]),
                     "-vf", (
-                        "scale='if(gt(iw/ih,9/16),9/16*ih,iw)':'if(gt(iw/ih,9/16),ih,16/9*iw)',"
-                        "pad=1080:1920:(1080-iw)/2:(1920-ih)/2:black,"
-                        "setsar=1"
+                        "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                        "setsar=1,"
+                        "format=yuv420p"
                     ),
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
@@ -130,8 +131,10 @@ def create_video_from_images(
                     "-movflags", "+faststart",
                     "-profile:v", "high",
                     "-level", "4.0",
-                    "-maxrate", "5000k",
-                    "-bufsize", "10000k",
+                    "-colorspace", "bt709",
+                    "-color_primaries", "bt709",
+                    "-color_trc", "bt709",
+                    "-color_range", "tv",
                     str(output_path)
                 ]
 
@@ -152,10 +155,10 @@ def create_video_from_images(
                 return True
 
             else:
-                # Multiple images - create portrait slideshow with improved approach
+                # Multiple images - create portrait slideshow with fixed approach
                 logger.info("Creating portrait slideshow from multiple images")
 
-                # Create individual portrait videos for each image with improved filter
+                # Create individual portrait videos for each image with fixed filter
                 temp_videos = []
                 for i, img_path in enumerate(image_paths):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
@@ -167,9 +170,10 @@ def create_video_from_images(
                         "-t", str(duration_per_image),
                         "-i", str(img_path),
                         "-vf", (
-                            "scale='if(gt(iw/ih,9/16),9/16*ih,iw)':'if(gt(iw/ih,9/16),ih,16/9*iw)',"
-                            "pad=1080:1920:(1080-iw)/2:(1920-ih)/2:black,"
-                            "setsar=1"
+                            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                            "setsar=1,"
+                            "format=yuv420p"
                         ),
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
@@ -181,8 +185,10 @@ def create_video_from_images(
                         "-sc_threshold", "0",
                         "-profile:v", "high",
                         "-level", "4.0",
-                        "-maxrate", "5000k",
-                        "-bufsize", "10000k",
+                        "-colorspace", "bt709",
+                        "-color_primaries", "bt709",
+                        "-color_trc", "bt709",
+                        "-color_range", "tv",
                         str(temp_video)
                     ]
 
