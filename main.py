@@ -10,6 +10,10 @@ from typing import List, Optional
 import asyncio
 from pathlib import Path
 import logging
+import aiohttp
+import aiofiles
+from urllib.parse import urlparse
+import mimetypes
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="FFmpeg Video Generator API",
-    description="Create videos from images with optional background music",
+    description="Create videos from image URLs with optional background music",
     version="1.0.0"
 )
 
@@ -41,6 +45,7 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
 MAX_IMAGES = 10
 SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+MAX_URL_LENGTH = 2048
 
 def check_ffmpeg():
     """Check if FFmpeg is available"""
@@ -81,6 +86,75 @@ async def save_upload_file(upload_file: UploadFile, destination: Path) -> None:
     except Exception as e:
         logger.error(f"Error saving file: {e}")
         raise HTTPException(status_code=500, detail="Failed to save file")
+
+def validate_image_url(url: str) -> bool:
+    """Validate image URL format"""
+    try:
+        parsed = urlparse(url)
+        if not all([parsed.scheme, parsed.netloc]):
+            return False
+        if len(url) > MAX_URL_LENGTH:
+            return False
+        return True
+    except Exception:
+        return False
+
+async def download_image_from_url(session: aiohttp.ClientSession, url: str, destination: Path) -> bool:
+    """Download image from URL and save to destination"""
+    try:
+        logger.info(f"Downloading image from: {url}")
+
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+            if response.status != 200:
+                logger.error(f"Failed to download image: HTTP {response.status}")
+                return False
+
+            # Check content type
+            content_type = response.headers.get('content-type', '').lower()
+            if not any(img_type in content_type for img_type in ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']):
+                logger.error(f"Invalid content type: {content_type}")
+                return False
+
+            # Check content length
+            content_length = response.headers.get('content-length')
+            if content_length and int(content_length) > MAX_FILE_SIZE:
+                logger.error(f"Image too large: {content_length} bytes")
+                return False
+
+            # Download and save
+            async with aiofiles.open(destination, 'wb') as f:
+                total_size = 0
+                async for chunk in response.content.iter_chunked(8192):
+                    total_size += len(chunk)
+                    if total_size > MAX_FILE_SIZE:
+                        logger.error(f"Image too large during download: {total_size} bytes")
+                        return False
+                    await f.write(chunk)
+
+            logger.info(f"Downloaded image: {destination} ({total_size} bytes)")
+            return True
+
+    except Exception as e:
+        logger.error(f"Error downloading image from {url}: {e}")
+        return False
+
+def get_image_extension_from_url(url: str, content_type: str = None) -> str:
+    """Get appropriate image extension from URL or content type"""
+    # Try to get extension from URL
+    parsed_url = urlparse(url)
+    path_ext = Path(parsed_url.path).suffix.lower()
+
+    if path_ext in SUPPORTED_IMAGE_FORMATS:
+        return path_ext
+
+    # Fallback to content type
+    if content_type:
+        extension = mimetypes.guess_extension(content_type)
+        if extension and extension.lower() in SUPPORTED_IMAGE_FORMATS:
+            return extension.lower()
+
+    # Default fallback
+    return '.jpg'
 
 def create_video_from_images(
     image_paths: List[Path],
@@ -307,24 +381,29 @@ async def health_check():
 
 @app.post("/create-video")
 async def create_video(
-    images: List[UploadFile] = File(..., description="List of image files"),
+    image_urls: List[str] = Form(..., description="List of image URLs"),
     audio: Optional[UploadFile] = File(None, description="Optional audio file"),
-    duration_per_image: float = Form(3.0, description="Duration per image in seconds"),  # Increased default
-    transition_duration: float = Form(1.0, description="Transition duration in seconds"),  # Increased default
+    duration_per_image: float = Form(3.0, description="Duration per image in seconds"),
+    transition_duration: float = Form(1.0, description="Transition duration in seconds"),
     fps: int = Form(25, description="Output video FPS")
 ):
-    """Create video from uploaded images with optional audio"""
+    """Create video from image URLs with optional audio"""
 
     # Check FFmpeg availability
     if not check_ffmpeg():
         raise HTTPException(status_code=503, detail="FFmpeg not available")
 
     # Validate inputs
-    if not images or len(images) == 0:
-        raise HTTPException(status_code=400, detail="At least one image is required")
+    if not image_urls or len(image_urls) == 0:
+        raise HTTPException(status_code=400, detail="At least one image URL is required")
 
-    if len(images) > MAX_IMAGES:
+    if len(image_urls) > MAX_IMAGES:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_IMAGES} images allowed")
+
+    # Validate URLs
+    for i, url in enumerate(image_urls):
+        if not validate_image_url(url):
+            raise HTTPException(status_code=400, detail=f"Invalid URL format for image {i+1}")
 
     # Generate unique ID for this request
     request_id = str(uuid.uuid4())
@@ -332,20 +411,24 @@ async def create_video(
     request_dir.mkdir(exist_ok=True)
 
     try:
-        # Validate and save images
+        # Download images from URLs
         image_paths = []
-        for i, image in enumerate(images):
-            # Validate file
-            if not validate_file_size(image):
-                raise HTTPException(status_code=413, detail=f"Image {i+1} is too large")
+        async with aiohttp.ClientSession() as session:
+            for i, url in enumerate(image_urls):
+                # Get appropriate extension
+                extension = get_image_extension_from_url(url)
+                image_path = request_dir / f"image_{i:04d}{extension}"
 
-            if not validate_image_format(image.filename):
-                raise HTTPException(status_code=400, detail=f"Image {i+1} has unsupported format")
+                # Download image
+                success = await download_image_from_url(session, url, image_path)
+                if not success:
+                    raise HTTPException(status_code=400, detail=f"Failed to download image {i+1} from URL: {url}")
 
-            # Save image
-            image_path = request_dir / f"image_{i:04d}{Path(image.filename).suffix}"
-            await save_upload_file(image, image_path)
-            image_paths.append(image_path)
+                # Validate downloaded file exists and has content
+                if not image_path.exists() or image_path.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail=f"Downloaded image {i+1} is empty or corrupted")
+
+                image_paths.append(image_path)
 
         # Handle audio if provided
         audio_path = None
