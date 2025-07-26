@@ -149,8 +149,8 @@ def create_video_from_images(
                 # Multiple images - use simpler fade approach instead of complex xfade
                 logger.info("Creating portrait slideshow with fade transitions")
 
-                # Calculate total duration
-                total_duration = (len(image_paths) * duration_per_image) - ((len(image_paths) - 1) * transition_duration)
+                # Calculate total duration - add transition time for last image fade-out
+                total_duration = (len(image_paths) * duration_per_image)
                 logger.info(f"Expected total video duration: {total_duration} seconds")
 
                 # Create individual videos with fade effects
@@ -167,10 +167,10 @@ def create_video_from_images(
                         fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
                         fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
                         video_duration = duration_per_image
-                    elif i == len(image_paths) - 1:  # Last image - fade in + fade out
+                    elif i == len(image_paths) - 1:  # Last image - fade in + fade out with extended duration
                         fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
-                        fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
-                        video_duration = duration_per_image
+                        fade_filters.append(f"fade=t=out:st={duration_per_image}:d={transition_duration}")
+                        video_duration = duration_per_image + transition_duration  # Extended duration for fade-out
                     else:  # Middle images - both fades
                         fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
                         fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
