@@ -146,28 +146,45 @@ def create_video_from_images(
                 return True
 
             else:
-                # Multiple images - create smooth crossfade slideshow
-                logger.info("Creating portrait slideshow with smooth crossfade transitions")
+                # Multiple images - use simpler fade approach instead of complex xfade
+                logger.info("Creating portrait slideshow with fade transitions")
 
-                # Calculate correct total duration: first image + (remaining images * duration) - (transitions * overlap)
-                total_duration = duration_per_image + ((len(image_paths) - 1) * (duration_per_image - transition_duration))
+                # Calculate total duration
+                total_duration = (len(image_paths) * duration_per_image) - ((len(image_paths) - 1) * transition_duration)
                 logger.info(f"Expected total video duration: {total_duration} seconds")
 
-                # Create individual videos - each needs to be long enough for crossfade
+                # Create individual videos with fade effects
                 temp_videos = []
                 for i, img_path in enumerate(image_paths):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
                     temp_videos.append(temp_video)
 
-                    # Each video duration: base duration + transition time for overlap
-                    video_duration = duration_per_image + transition_duration
+                    # Create fade effects based on position
+                    fade_filters = []
+
+                    # Add fade in for first image or fade in + out for others
+                    if i == 0:  # First image - fade in only
+                        fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
+                        video_duration = duration_per_image
+                    elif i == len(image_paths) - 1:  # Last image - fade out only
+                        fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
+                        video_duration = duration_per_image
+                    else:  # Middle images - both fades
+                        fade_filters.append(f"fade=t=in:st=0:d={transition_duration}")
+                        fade_filters.append(f"fade=t=out:st={duration_per_image - transition_duration}:d={transition_duration}")
+                        video_duration = duration_per_image
+
+                    # Build video filter
+                    video_filter = f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
+                    if fade_filters:
+                        video_filter += "," + ",".join(fade_filters)
 
                     single_cmd = [
                         "ffmpeg", "-y",
                         "-loop", "1",
                         "-t", str(video_duration),
                         "-i", str(img_path),
-                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+                        "-vf", video_filter,
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
                         "-preset", "ultrafast",
@@ -177,7 +194,8 @@ def create_video_from_images(
                         str(temp_video)
                     ]
 
-                    logger.info(f"Creating video {i+1}/{len(image_paths)} for crossfade (duration: {video_duration}s)")
+                    logger.info(f"Creating video {i+1}/{len(image_paths)} with fade effects")
+                    logger.info(f"Filter: {video_filter}")
                     result = subprocess.run(single_cmd, capture_output=True, text=True, timeout=90)
                     if result.returncode != 0:
                         logger.error(f"Error creating video for image {i}: {result.stderr}")
@@ -189,63 +207,30 @@ def create_video_from_images(
 
                     logger.info(f"Created temp video: {temp_video} (size: {temp_video.stat().st_size} bytes)")
 
-                # Create crossfade slideshow using xfade filter with proper timing
-                if len(temp_videos) == 2:
-                    # Two videos - simple crossfade
-                    crossfade_cmd = [
-                        "ffmpeg", "-y",
-                        "-i", str(temp_videos[0]),
-                        "-i", str(temp_videos[1]),
-                        "-filter_complex",
-                        f"[0][1]xfade=transition=fade:duration={transition_duration}:offset={duration_per_image}",
-                        "-t", str(total_duration),
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "ultrafast",
-                        "-crf", "28",
-                        "-movflags", "+faststart",
-                        str(output_path)
-                    ]
-                else:
-                    # Multiple videos - chain crossfades with correct timing
-                    filter_parts = []
-                    current_label = "0"
-
-                    # Each crossfade starts when the current image should begin fading out
-                    for i in range(1, len(temp_videos)):
-                        offset = duration_per_image + ((i - 1) * (duration_per_image - transition_duration))
-                        next_label = f"v{i}"
-                        filter_parts.append(f"[{current_label}][{i}]xfade=transition=fade:duration={transition_duration}:offset={offset}[{next_label}]")
-                        current_label = next_label
-
-                    filter_complex = ";".join(filter_parts)
-                    logger.info(f"Crossfade filter: {filter_complex}")
-
-                    crossfade_cmd = [
-                        "ffmpeg", "-y"
-                    ]
-
-                    # Add all input videos
+                # Create concat file for final merge
+                concat_file = temp_path / "concat.txt"
+                with open(concat_file, 'w') as f:
                     for video in temp_videos:
-                        crossfade_cmd.extend(["-i", str(video)])
+                        video_path = str(video).replace('\\', '/')
+                        f.write(f"file '{video_path}'\n")
 
-                    crossfade_cmd.extend([
-                        "-filter_complex", filter_complex,
-                        "-map", f"[{current_label}]",
-                        "-t", str(total_duration),  # Explicitly set total duration
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "ultrafast",
-                        "-crf", "28",
-                        "-movflags", "+faststart",
-                        str(output_path)
-                    ])
+                logger.info(f"Created concat file with {len(temp_videos)} videos")
 
-                logger.info(f"Creating video with smooth crossfade transitions (target duration: {total_duration}s)")
-                result = subprocess.run(crossfade_cmd, capture_output=True, text=True, timeout=300)
+                # Concatenate videos with stream copy for faster processing
+                concat_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", str(concat_file),
+                    "-c", "copy",
+                    "-movflags", "+faststart",
+                    str(output_path)
+                ]
 
+                logger.info(f"Concatenating videos with fade transitions")
+                result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=180)
                 if result.returncode != 0:
-                    logger.error(f"Crossfade creation failed: {result.stderr}")
+                    logger.error(f"Error concatenating videos: {result.stderr}")
                     return False
 
                 # Check output file size
@@ -253,7 +238,7 @@ def create_video_from_images(
                     logger.error("Output video file is empty or too small after processing.")
                     return False
 
-                logger.info(f"Portrait slideshow with smooth transitions created successfully: {output_path.stat().st_size} bytes")
+                logger.info(f"Portrait slideshow with fade transitions created successfully: {output_path.stat().st_size} bytes")
                 return True
 
     except subprocess.TimeoutExpired as e:
