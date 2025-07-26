@@ -107,34 +107,20 @@ def create_video_from_images(
             logger.info(f"Using temp directory: {temp_path}")
 
             if len(image_paths) == 1:
-                # Single image - create a portrait video with fixed filter chain
+                # Single image - create a portrait video using Stack Overflow solution
                 logger.info("Creating portrait video from single image")
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-t", str(duration_per_image),
                     "-i", str(image_paths[0]),
-                    "-vf", (
-                        "scale=1080:1920:force_original_aspect_ratio=decrease,"
-                        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-                        "setsar=1,"
-                        "format=yuv420p"
-                    ),
+                    "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
-                    "-preset", "fast",
-                    "-crf", "18",
+                    "-preset", "medium",
+                    "-crf", "23",
                     "-r", str(fps),
-                    "-g", str(fps * 2),  # GOP size
-                    "-keyint_min", str(fps),
-                    "-sc_threshold", "0",
                     "-movflags", "+faststart",
-                    "-profile:v", "high",
-                    "-level", "4.0",
-                    "-colorspace", "bt709",
-                    "-color_primaries", "bt709",
-                    "-color_trc", "bt709",
-                    "-color_range", "tv",
                     str(output_path)
                 ]
 
@@ -155,10 +141,10 @@ def create_video_from_images(
                 return True
 
             else:
-                # Multiple images - create portrait slideshow with fixed approach
+                # Multiple images - create portrait slideshow using Stack Overflow solution
                 logger.info("Creating portrait slideshow from multiple images")
 
-                # Create individual portrait videos for each image with fixed filter
+                # Create individual portrait videos for each image
                 temp_videos = []
                 for i, img_path in enumerate(image_paths):
                     temp_video = temp_path / f"video_{i:04d}.mp4"
@@ -169,26 +155,12 @@ def create_video_from_images(
                         "-loop", "1",
                         "-t", str(duration_per_image),
                         "-i", str(img_path),
-                        "-vf", (
-                            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-                            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-                            "setsar=1,"
-                            "format=yuv420p"
-                        ),
+                        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-preset", "fast",
-                        "-crf", "18",
+                        "-preset", "medium",
+                        "-crf", "23",
                         "-r", str(fps),
-                        "-g", str(fps * 2),
-                        "-keyint_min", str(fps),
-                        "-sc_threshold", "0",
-                        "-profile:v", "high",
-                        "-level", "4.0",
-                        "-colorspace", "bt709",
-                        "-color_primaries", "bt709",
-                        "-color_trc", "bt709",
-                        "-color_range", "tv",
                         str(temp_video)
                     ]
 
