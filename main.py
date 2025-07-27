@@ -367,7 +367,7 @@ def create_video_from_images(
                             f"drawtext=text='{text_content}':fontsize=64:fontcolor=white:"
                             f"x=(w-text_w)/2:y=h-text_h-100:"
                             f"box=1:boxcolor=black@0.8:boxborderw=25:"
-                            f"bordercolor=black@0.8:borderw=3:"
+                            f"bordercolor=white@0.6:borderw=5:"
                             f"enable='between(t,0,3)'"
                         )
                         video_filter += f",{text_filter}"
