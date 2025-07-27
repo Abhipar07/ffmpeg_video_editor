@@ -156,6 +156,75 @@ def get_image_extension_from_url(url: str, content_type: str = None) -> str:
     # Default fallback
     return '.jpg'
 
+def validate_audio_url(url: str) -> bool:
+    """Validate audio URL format"""
+    try:
+        parsed = urlparse(url)
+        if not all([parsed.scheme, parsed.netloc]):
+            return False
+        if len(url) > MAX_URL_LENGTH:
+            return False
+        return True
+    except Exception:
+        return False
+
+async def download_audio_from_url(session: aiohttp.ClientSession, url: str, destination: Path) -> bool:
+    """Download audio from URL and save to destination"""
+    try:
+        logger.info(f"Downloading audio from: {url}")
+
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as response:
+            if response.status != 200:
+                logger.error(f"Failed to download audio: HTTP {response.status}")
+                return False
+
+            # Check content type
+            content_type = response.headers.get('content-type', '').lower()
+            if not any(audio_type in content_type for audio_type in ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/aac', 'audio/ogg']):
+                logger.error(f"Invalid audio content type: {content_type}")
+                return False
+
+            # Check content length
+            content_length = response.headers.get('content-length')
+            if content_length and int(content_length) > MAX_FILE_SIZE:
+                logger.error(f"Audio too large: {content_length} bytes")
+                return False
+
+            # Download and save
+            async with aiofiles.open(destination, 'wb') as f:
+                total_size = 0
+                async for chunk in response.content.iter_chunked(8192):
+                    total_size += len(chunk)
+                    if total_size > MAX_FILE_SIZE:
+                        logger.error(f"Audio too large during download: {total_size} bytes")
+                        return False
+                    await f.write(chunk)
+
+            logger.info(f"Downloaded audio: {destination} ({total_size} bytes)")
+            return True
+
+    except Exception as e:
+        logger.error(f"Error downloading audio from {url}: {e}")
+        return False
+
+def get_audio_extension_from_url(url: str, content_type: str = None) -> str:
+    """Get appropriate audio extension from URL or content type"""
+    # Try to get extension from URL
+    parsed_url = urlparse(url)
+    path_ext = Path(parsed_url.path).suffix.lower()
+
+    if path_ext in SUPPORTED_AUDIO_FORMATS:
+        return path_ext
+
+    # Fallback to content type
+    if content_type:
+        extension = mimetypes.guess_extension(content_type)
+        if extension and extension.lower() in SUPPORTED_AUDIO_FORMATS:
+            return extension.lower()
+
+    # Default fallback
+    return '.mp3'
+
 def create_video_from_images(
     image_paths: List[Path],
     output_path: Path,
@@ -383,6 +452,7 @@ async def health_check():
 async def create_video(
     image_urls: List[str] = Form(..., description="List of image URLs"),
     audio: Optional[UploadFile] = File(None, description="Optional audio file"),
+    audio_url: Optional[str] = Form(None, description="Optional audio URL"),
     duration_per_image: float = Form(3.0, description="Duration per image in seconds"),
     transition_duration: float = Form(1.0, description="Transition duration in seconds"),
     fps: int = Form(25, description="Output video FPS")
@@ -400,10 +470,17 @@ async def create_video(
     if len(image_urls) > MAX_IMAGES:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_IMAGES} images allowed")
 
+    # Validate that only one audio source is provided
+    if audio and audio.filename and audio_url:
+        raise HTTPException(status_code=400, detail="Provide either audio file or audio URL, not both")
+
     # Validate URLs
     for i, url in enumerate(image_urls):
         if not validate_image_url(url):
             raise HTTPException(status_code=400, detail=f"Invalid URL format for image {i+1}")
+
+    if audio_url and not validate_audio_url(audio_url):
+        raise HTTPException(status_code=400, detail="Invalid audio URL format")
 
     # Generate unique ID for this request
     request_id = str(uuid.uuid4())
@@ -430,9 +507,24 @@ async def create_video(
 
                 image_paths.append(image_path)
 
-        # Handle audio if provided
-        audio_path = None
-        if audio and audio.filename:
+            # Handle audio if provided via URL
+            audio_path = None
+            if audio_url:
+                # Get appropriate extension
+                extension = get_audio_extension_from_url(audio_url)
+                audio_path = request_dir / f"audio{extension}"
+
+                # Download audio
+                success = await download_audio_from_url(session, audio_url, audio_path)
+                if not success:
+                    raise HTTPException(status_code=400, detail=f"Failed to download audio from URL: {audio_url}")
+
+                # Validate downloaded file exists and has content
+                if not audio_path.exists() or audio_path.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail="Downloaded audio is empty or corrupted")
+
+        # Handle audio if provided as uploaded file
+        if audio and audio.filename and not audio_url:
             if not validate_file_size(audio):
                 raise HTTPException(status_code=413, detail="Audio file is too large")
 
@@ -482,7 +574,8 @@ async def create_video(
             "download_url": f"/download/{output_filename}",
             "file_size": final_video_path.stat().st_size,
             "images_processed": len(image_paths),
-            "audio_added": audio_path is not None
+            "audio_added": audio_path is not None,
+            "audio_source": "url" if audio_url else ("file" if audio and audio.filename else None)
         }
 
     except HTTPException:
