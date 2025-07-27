@@ -266,9 +266,10 @@ def create_video_from_images(
                 # Add text overlay if provided
                 if text_content:
                     text_filter = (
-                        f"drawtext=text='{text_content}':fontsize=48:fontcolor=white:"
+                        f"drawtext=text='{text_content}':fontsize=64:fontcolor=white:"
                         f"x=(w-text_w)/2:y=h-text_h-100:"
-                        f"box=1:boxcolor=black@0.8:boxborderw=20:"
+                        f"box=1:boxcolor=black@0.8:boxborderw=25:"
+                        f"bordercolor=black@0.8:borderw=3:"
                         f"enable='between(t,0,3)'"
                     )
                     video_filter += f",{text_filter}"
@@ -348,9 +349,10 @@ def create_video_from_images(
                     # Add text overlay to first video only (first 3 seconds of entire video)
                     if i == 0 and text_content:
                         text_filter = (
-                            f"drawtext=text='{text_content}':fontsize=48:fontcolor=white:"
+                            f"drawtext=text='{text_content}':fontsize=64:fontcolor=white:"
                             f"x=(w-text_w)/2:y=h-text_h-100:"
-                            f"box=1:boxcolor=black@0.8:boxborderw=20:"
+                            f"box=1:boxcolor=black@0.8:boxborderw=25:"
+                            f"bordercolor=black@0.8:borderw=3:"
                             f"enable='between(t,0,3)'"
                         )
                         video_filter += f",{text_filter}"
