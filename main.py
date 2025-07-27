@@ -269,10 +269,10 @@ def create_video_from_images(
                 # Add first text overlay if provided
                 if text_content:
                     text_filter = (
-                        f"drawtext=text='{text_content}':fontsize=64:fontcolor=white:"
+                        f"drawtext=text='{text_content}':fontsize=72:fontcolor=white:"
                         f"x=(w-text_w)/2:y=h-text_h-100:"
                         f"box=1:boxcolor=black@0.8:boxborderw=25:"
-                        f"bordercolor=white@0.6:borderw=5:"
+                        f"shadowcolor=black:shadowx=2:shadowy=2:"
                         f"enable='between(t,0,3)'"
                     )
                     video_filter += f",{text_filter}"
@@ -281,10 +281,10 @@ def create_video_from_images(
                 if second_text_content:
                     video_duration = duration_per_image + transition_duration
                     second_text_filter = (
-                        f"drawtext=text='{second_text_content}':fontsize=64:fontcolor=white:"
+                        f"drawtext=text='{second_text_content}':fontsize=72:fontcolor=white:"
                         f"x=(w-text_w)/2:y=h-text_h-100:"
                         f"box=1:boxcolor=black@0.8:boxborderw=25:"
-                        f"bordercolor=white@0.6:borderw=5:"
+                        f"shadowcolor=black:shadowx=2:shadowy=2:"
                         f"enable='between(t,3,{video_duration})'"
                     )
                     video_filter += f",{second_text_filter}"
@@ -364,10 +364,10 @@ def create_video_from_images(
                     # Add text overlay to first video only (first 3 seconds of entire video)
                     if i == 0 and text_content:
                         text_filter = (
-                            f"drawtext=text='{text_content}':fontsize=64:fontcolor=white:"
+                            f"drawtext=text='{text_content}':fontsize=72:fontcolor=white:"
                             f"x=(w-text_w)/2:y=h-text_h-100:"
                             f"box=1:boxcolor=black@0.8:boxborderw=25:"
-                            f"bordercolor=white@0.6:borderw=5:"
+                            f"shadowcolor=black:shadowx=2:shadowy=2:"
                             f"enable='between(t,0,3)'"
                         )
                         video_filter += f",{text_filter}"
@@ -377,10 +377,10 @@ def create_video_from_images(
                         # Calculate when second text should start appearing in the final concatenated video
                         second_text_start = max(3.0, 0.0)  # Start after first text ends
                         second_text_filter = (
-                            f"drawtext=text='{second_text_content}':fontsize=64:fontcolor=white:"
+                            f"drawtext=text='{second_text_content}':fontsize=72:fontcolor=white:"
                             f"x=(w-text_w)/2:y=h-text_h-100:"
                             f"box=1:boxcolor=black@0.8:boxborderw=25:"
-                            f"bordercolor=white@0.6:borderw=5:"
+                            f"shadowcolor=black:shadowx=2:shadowy=2:"
                             f"enable='gte(t,0)'"  # Show throughout the last video
                         )
                         video_filter += f",{second_text_filter}"
