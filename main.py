@@ -230,12 +230,15 @@ def create_video_from_images(
     output_path: Path,
     duration_per_image: float = 2.0,
     transition_duration: float = 1.0,
-    fps: int = 25
+    fps: int = 25,
+    text_content: Optional[str] = None
 ) -> bool:
     """Create video from images using FFmpeg"""
     try:
         logger.info(f"Creating video from {len(image_paths)} images")
         logger.info(f"Output path: {output_path}")
+        if text_content:
+            logger.info(f"Adding text overlay: {text_content}")
 
         # Verify all input images exist
         for i, img_path in enumerate(image_paths):
@@ -252,16 +255,30 @@ def create_video_from_images(
             if len(image_paths) == 1:
                 # Single image - create a portrait video with fade in only
                 logger.info("Creating portrait video from single image with fade effects")
+
+                # Build video filter with optional text overlay
+                video_filter = (
+                    f"scale=1080:1920:force_original_aspect_ratio=decrease,"
+                    f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                    f"fade=t=in:st=0:d={transition_duration}"
+                )
+
+                # Add text overlay if provided
+                if text_content:
+                    text_filter = (
+                        f"drawtext=text='{text_content}':fontsize=48:fontcolor=white:"
+                        f"x=(w-text_w)/2:y=h-text_h-100:"
+                        f"box=1:boxcolor=black@0.8:boxborderw=20:"
+                        f"enable='between(t,0,3)'"
+                    )
+                    video_filter += f",{text_filter}"
+
                 cmd = [
                     "ffmpeg", "-y",
                     "-loop", "1",
                     "-t", str(duration_per_image + transition_duration),  # Add time for fade in
                     "-i", str(image_paths[0]),
-                    "-vf", (
-                        f"scale=1080:1920:force_original_aspect_ratio=decrease,"
-                        f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-                        f"fade=t=in:st=0:d={transition_duration}"
-                    ),
+                    "-vf", video_filter,
                     "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
                     "-preset", "ultrafast",
@@ -327,6 +344,16 @@ def create_video_from_images(
                     video_filter = f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
                     if fade_filters:
                         video_filter += "," + ",".join(fade_filters)
+
+                    # Add text overlay to first video only (first 3 seconds of entire video)
+                    if i == 0 and text_content:
+                        text_filter = (
+                            f"drawtext=text='{text_content}':fontsize=48:fontcolor=white:"
+                            f"x=(w-text_w)/2:y=h-text_h-100:"
+                            f"box=1:boxcolor=black@0.8:boxborderw=20:"
+                            f"enable='between(t,0,3)'"
+                        )
+                        video_filter += f",{text_filter}"
 
                     single_cmd = [
                         "ffmpeg", "-y",
@@ -453,11 +480,12 @@ async def create_video(
     image_urls: List[str] = Form(..., description="List of image URLs"),
     audio: Optional[UploadFile] = File(None, description="Optional audio file"),
     audio_url: Optional[str] = Form(None, description="Optional audio URL"),
+    text_content: Optional[str] = Form(None, description="Text to display for first 3 seconds"),
     duration_per_image: float = Form(3.0, description="Duration per image in seconds"),
     transition_duration: float = Form(1.0, description="Transition duration in seconds"),
     fps: int = Form(25, description="Output video FPS")
 ):
-    """Create video from image URLs with optional audio"""
+    """Create video from image URLs with optional audio and text overlay"""
 
     # Check FFmpeg availability
     if not check_ffmpeg():
@@ -539,13 +567,14 @@ async def create_video(
         temp_video_path = OUTPUT_DIR / f"temp_{output_filename}"
         final_video_path = OUTPUT_DIR / output_filename
 
-        # Generate video from images
+        # Generate video from images with text overlay
         success = create_video_from_images(
             image_paths,
             temp_video_path if audio_path else final_video_path,
             duration_per_image,
             transition_duration,
-            fps
+            fps,
+            text_content
         )
 
         if not success:
@@ -575,7 +604,8 @@ async def create_video(
             "file_size": final_video_path.stat().st_size,
             "images_processed": len(image_paths),
             "audio_added": audio_path is not None,
-            "audio_source": "url" if audio_url else ("file" if audio and audio.filename else None)
+            "audio_source": "url" if audio_url else ("file" if audio and audio.filename else None),
+            "text_added": text_content is not None
         }
 
     except HTTPException:
