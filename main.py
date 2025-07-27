@@ -231,14 +231,17 @@ def create_video_from_images(
     duration_per_image: float = 2.0,
     transition_duration: float = 1.0,
     fps: int = 25,
-    text_content: Optional[str] = None
+    text_content: Optional[str] = None,
+    second_text_content: Optional[str] = None
 ) -> bool:
     """Create video from images using FFmpeg"""
     try:
         logger.info(f"Creating video from {len(image_paths)} images")
         logger.info(f"Output path: {output_path}")
         if text_content:
-            logger.info(f"Adding text overlay: {text_content}")
+            logger.info(f"Adding first text overlay: {text_content}")
+        if second_text_content:
+            logger.info(f"Adding second text overlay: {second_text_content}")
 
         # Verify all input images exist
         for i, img_path in enumerate(image_paths):
@@ -263,16 +266,28 @@ def create_video_from_images(
                     f"fade=t=in:st=0:d={transition_duration}"
                 )
 
-                # Add text overlay if provided
+                # Add first text overlay if provided
                 if text_content:
                     text_filter = (
                         f"drawtext=text='{text_content}':fontsize=64:fontcolor=white:"
                         f"x=(w-text_w)/2:y=h-text_h-100:"
                         f"box=1:boxcolor=black@0.8:boxborderw=25:"
-                        f"bordercolor=black@0.8:borderw=3:"
+                        f"bordercolor=white@0.6:borderw=5:"
                         f"enable='between(t,0,3)'"
                     )
                     video_filter += f",{text_filter}"
+
+                # Add second text overlay if provided
+                if second_text_content:
+                    video_duration = duration_per_image + transition_duration
+                    second_text_filter = (
+                        f"drawtext=text='{second_text_content}':fontsize=64:fontcolor=white:"
+                        f"x=(w-text_w)/2:y=h-text_h-100:"
+                        f"box=1:boxcolor=black@0.8:boxborderw=25:"
+                        f"bordercolor=white@0.6:borderw=5:"
+                        f"enable='between(t,3,{video_duration})'"
+                    )
+                    video_filter += f",{second_text_filter}"
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -356,6 +371,19 @@ def create_video_from_images(
                             f"enable='between(t,0,3)'"
                         )
                         video_filter += f",{text_filter}"
+
+                    # Add second text overlay to last video only (from 3 seconds to end of video)
+                    if i == len(image_paths) - 1 and second_text_content:
+                        # Calculate when second text should start appearing in the final concatenated video
+                        second_text_start = max(3.0, 0.0)  # Start after first text ends
+                        second_text_filter = (
+                            f"drawtext=text='{second_text_content}':fontsize=64:fontcolor=white:"
+                            f"x=(w-text_w)/2:y=h-text_h-100:"
+                            f"box=1:boxcolor=black@0.8:boxborderw=25:"
+                            f"bordercolor=white@0.6:borderw=5:"
+                            f"enable='gte(t,0)'"  # Show throughout the last video
+                        )
+                        video_filter += f",{second_text_filter}"
 
                     single_cmd = [
                         "ffmpeg", "-y",
@@ -482,7 +510,8 @@ async def create_video(
     image_urls: List[str] = Form(..., description="List of image URLs"),
     audio: Optional[UploadFile] = File(None, description="Optional audio file"),
     audio_url: Optional[str] = Form(None, description="Optional audio URL"),
-    text_content: Optional[str] = Form(None, description="Text to display for first 3 seconds"),
+    text_content: Optional[str] = Form(None, description="First text to display for first 3 seconds"),
+    second_text_content: Optional[str] = Form(None, description="Second text to display from 3 seconds to end"),
     duration_per_image: float = Form(3.0, description="Duration per image in seconds"),
     transition_duration: float = Form(1.0, description="Transition duration in seconds"),
     fps: int = Form(25, description="Output video FPS")
@@ -576,7 +605,8 @@ async def create_video(
             duration_per_image,
             transition_duration,
             fps,
-            text_content
+            text_content,
+            second_text_content
         )
 
         if not success:
@@ -607,7 +637,8 @@ async def create_video(
             "images_processed": len(image_paths),
             "audio_added": audio_path is not None,
             "audio_source": "url" if audio_url else ("file" if audio and audio.filename else None),
-            "text_added": text_content is not None
+            "text_added": text_content is not None,
+            "second_text_added": second_text_content is not None
         }
 
     except HTTPException:
