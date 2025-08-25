@@ -540,7 +540,6 @@ def create_video_with_audio_and_text(
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
             f"drawtext=text='{formatted_text}':"
-            f"fontfile='C\\:/Windows/Fonts/arial.ttf':"  # Professional Arial font
             f"fontsize=60:"
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"  # Center horizontally
@@ -551,11 +550,12 @@ def create_video_with_audio_and_text(
 
         # Build audio filter for mixing:
         # - Background music starts immediately and loops
-        # - Main audio starts after delay
+        # - Main audio starts after delay (convert delay to milliseconds)
         # - Mix both with background music at lower volume
+        audio_delay_ms = int(audio_delay * 1000)
         audio_filter = (
             f"[1:a]volume=0.3[bg];"  # Background music at 30% volume
-            f"[2:a]adelay={int(audio_delay * 1000)}|{int(audio_delay * 1000)}[delayed];"  # Delay main audio by specified seconds
+            f"[2:a]adelay={audio_delay_ms}[delayed];"  # Delay main audio (simplified for mono)
             f"[bg][delayed]amix=inputs=2:duration=first:dropout_transition=2[mixed]"  # Mix both audio tracks
         )
 
@@ -564,6 +564,7 @@ def create_video_with_audio_and_text(
             "ffmpeg", "-y",
             "-loop", "1",
             "-t", str(video_duration),
+            "-r", str(fps),  # Set input framerate before input
             "-i", str(background_image_path),  # Input 0: Background image
             "-stream_loop", "-1",
             "-i", str(background_music_path),  # Input 1: Background music (looped)
@@ -572,13 +573,13 @@ def create_video_with_audio_and_text(
             "-filter_complex", audio_filter,
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
-            "-preset", "medium",
-            "-crf", "23",  # Better quality
-            "-r", str(fps),
+            "-preset", "ultrafast",  # Faster encoding
+            "-crf", "28",  # Slightly lower quality for faster processing
+            "-r", str(fps),  # Output framerate
             "-c:a", "aac",
-            "-b:a", "192k",  # Higher audio bitrate for better quality
+            "-b:a", "128k",  # Standard audio bitrate
             "-ar", "44100",  # Standard audio sample rate
-            "-shortest",  # End when shortest stream ends
+            "-t", str(video_duration),  # Limit output duration
             "-map", "0:v:0",  # Video from background image
             "-map", "[mixed]",  # Mixed audio
             "-movflags", "+faststart",
