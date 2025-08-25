@@ -484,6 +484,132 @@ def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) ->
         logger.error(f"Error adding audio: {e}")
         return False
 
+def create_video_with_audio_and_text(
+    background_image_path: Path,
+    main_audio_path: Path,
+    background_music_path: Path,
+    output_path: Path,
+    text_content: str,
+    video_duration: float = 30.0,
+    fps: int = 25,
+    audio_delay: float = 2.0
+) -> bool:
+    """Create video with background image, mixed audio, and centered text overlay"""
+    try:
+        logger.info(f"Creating video with background image: {background_image_path}")
+        logger.info(f"Main audio: {main_audio_path}")
+        logger.info(f"Background music: {background_music_path}")
+        logger.info(f"Text content: {text_content}")
+        logger.info(f"Video duration: {video_duration}s, Audio delay: {audio_delay}s")
+
+        # Verify all input files exist
+        if not background_image_path.exists():
+            logger.error(f"Background image does not exist: {background_image_path}")
+            return False
+        if not main_audio_path.exists():
+            logger.error(f"Main audio does not exist: {main_audio_path}")
+            return False
+        if not background_music_path.exists():
+            logger.error(f"Background music does not exist: {background_music_path}")
+            return False
+
+        # Format text with line breaks (split into lines of ~3-4 words each)
+        words = text_content.split()
+        lines = []
+        current_line = []
+        
+        for word in words:
+            current_line.append(word)
+            if len(current_line) >= 3:  # 3-4 words per line for better readability
+                lines.append(' '.join(current_line))
+                current_line = []
+        
+        if current_line:  # Add remaining words
+            lines.append(' '.join(current_line))
+        
+        # Join lines with newline character for FFmpeg drawtext
+        formatted_text = '\\n'.join(lines)
+        
+        # Escape special characters for FFmpeg
+        formatted_text = formatted_text.replace("'", "\\'").replace(":", "\\:")
+        
+        logger.info(f"Formatted text: {formatted_text}")
+
+        # Build video filter with background image, scaling, and text overlay
+        video_filter = (
+            f"scale=1080:1920:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+            f"drawtext=text='{formatted_text}':"
+            f"fontfile='C\\:/Windows/Fonts/arial.ttf':"  # Professional Arial font
+            f"fontsize=60:"
+            f"fontcolor=black:"
+            f"x=(w-text_w)/2:"  # Center horizontally
+            f"y=(h-text_h)/2:"  # Center vertically
+            f"box=1:boxcolor=white@0.8:boxborderw=30:"  # White background box for better readability
+            f"shadowcolor=gray:shadowx=3:shadowy=3"  # Subtle shadow
+        )
+
+        # Build audio filter for mixing:
+        # - Background music starts immediately and loops
+        # - Main audio starts after delay
+        # - Mix both with background music at lower volume
+        audio_filter = (
+            f"[1:a]volume=0.3[bg];"  # Background music at 30% volume
+            f"[2:a]adelay={int(audio_delay * 1000)}|{int(audio_delay * 1000)}[delayed];"  # Delay main audio by specified seconds
+            f"[bg][delayed]amix=inputs=2:duration=first:dropout_transition=2[mixed]"  # Mix both audio tracks
+        )
+
+        # FFmpeg command with three inputs: background image, background music, main audio
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-t", str(video_duration),
+            "-i", str(background_image_path),  # Input 0: Background image
+            "-stream_loop", "-1",
+            "-i", str(background_music_path),  # Input 1: Background music (looped)
+            "-i", str(main_audio_path),        # Input 2: Main audio
+            "-vf", video_filter,
+            "-filter_complex", audio_filter,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "medium",
+            "-crf", "23",  # Better quality
+            "-r", str(fps),
+            "-c:a", "aac",
+            "-b:a", "192k",  # Higher audio bitrate for better quality
+            "-ar", "44100",  # Standard audio sample rate
+            "-shortest",  # End when shortest stream ends
+            "-map", "0:v:0",  # Video from background image
+            "-map", "[mixed]",  # Mixed audio
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+
+        logger.info(f"FFmpeg command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
+            logger.error(f"FFmpeg error (return code {result.returncode}): {result.stderr}")
+            logger.error(f"FFmpeg stdout: {result.stdout}")
+            return False
+
+        # Check output file size
+        if not output_path.exists() or output_path.stat().st_size < 1000:
+            logger.error("Output video file is empty or too small.")
+            return False
+
+        logger.info(f"Video with audio and text created successfully: {output_path.stat().st_size} bytes")
+        return True
+
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"FFmpeg command timed out: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Error creating video with audio and text: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
 @app.get("/")
 async def root():
     """API health check"""
@@ -639,6 +765,178 @@ async def create_video(
             "audio_source": "url" if audio_url else ("file" if audio and audio.filename else None),
             "text_added": text_content is not None,
             "second_text_added": second_text_content is not None
+        }
+
+    except HTTPException:
+        # Clean up on error
+        shutil.rmtree(request_dir, ignore_errors=True)
+        raise
+    except Exception as e:
+        # Clean up on error
+        shutil.rmtree(request_dir, ignore_errors=True)
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/create-audio-video")
+async def create_audio_video(
+    background_image_url: str = Form(..., description="Background image URL"),
+    main_audio: Optional[UploadFile] = File(None, description="Main audio file"),
+    main_audio_url: Optional[str] = Form(None, description="Main audio URL"),
+    background_music: Optional[UploadFile] = File(None, description="Background music file"),
+    background_music_url: Optional[str] = Form(None, description="Background music URL"),
+    text_content: str = Form(..., description="Text content to display (10-15 words)"),
+    video_duration: float = Form(30.0, description="Video duration in seconds"),
+    audio_delay: float = Form(2.0, description="Delay for main audio in seconds"),
+    fps: int = Form(25, description="Output video FPS")
+):
+    """Create video with background image, mixed audio, and centered text overlay"""
+    
+    # Check FFmpeg availability
+    if not check_ffmpeg():
+        raise HTTPException(status_code=503, detail="FFmpeg not available")
+
+    # Validate inputs
+    if not background_image_url:
+        raise HTTPException(status_code=400, detail="Background image URL is required")
+    
+    if not validate_image_url(background_image_url):
+        raise HTTPException(status_code=400, detail="Invalid background image URL format")
+
+    if not text_content or len(text_content.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Text content is required")
+
+    # Validate text length (should be 10-15 words)
+    word_count = len(text_content.strip().split())
+    if word_count < 5 or word_count > 20:
+        raise HTTPException(status_code=400, detail="Text content should be between 5-20 words")
+
+    # Validate that audio sources are provided
+    if not ((main_audio and main_audio.filename) or main_audio_url):
+        raise HTTPException(status_code=400, detail="Main audio (file or URL) is required")
+
+    if not ((background_music and background_music.filename) or background_music_url):
+        raise HTTPException(status_code=400, detail="Background music (file or URL) is required")
+
+    # Validate that only one source per audio type is provided
+    if (main_audio and main_audio.filename) and main_audio_url:
+        raise HTTPException(status_code=400, detail="Provide either main audio file or URL, not both")
+
+    if (background_music and background_music.filename) and background_music_url:
+        raise HTTPException(status_code=400, detail="Provide either background music file or URL, not both")
+
+    # Validate audio URLs if provided
+    if main_audio_url and not validate_audio_url(main_audio_url):
+        raise HTTPException(status_code=400, detail="Invalid main audio URL format")
+
+    if background_music_url and not validate_audio_url(background_music_url):
+        raise HTTPException(status_code=400, detail="Invalid background music URL format")
+
+    # Generate unique ID for this request
+    request_id = str(uuid.uuid4())
+    request_dir = UPLOAD_DIR / request_id
+    request_dir.mkdir(exist_ok=True)
+
+    try:
+        # Download background image
+        async with aiohttp.ClientSession() as session:
+            # Get background image
+            bg_extension = get_image_extension_from_url(background_image_url)
+            bg_image_path = request_dir / f"background{bg_extension}"
+            
+            success = await download_image_from_url(session, background_image_url, bg_image_path)
+            if not success:
+                raise HTTPException(status_code=400, detail=f"Failed to download background image from URL: {background_image_url}")
+
+            if not bg_image_path.exists() or bg_image_path.stat().st_size == 0:
+                raise HTTPException(status_code=400, detail="Downloaded background image is empty or corrupted")
+
+            # Handle main audio
+            main_audio_path = None
+            if main_audio_url:
+                # Download from URL
+                audio_extension = get_audio_extension_from_url(main_audio_url)
+                main_audio_path = request_dir / f"main_audio{audio_extension}"
+                
+                success = await download_audio_from_url(session, main_audio_url, main_audio_path)
+                if not success:
+                    raise HTTPException(status_code=400, detail=f"Failed to download main audio from URL: {main_audio_url}")
+
+                if not main_audio_path.exists() or main_audio_path.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail="Downloaded main audio is empty or corrupted")
+
+            # Handle background music
+            bg_music_path = None
+            if background_music_url:
+                # Download from URL
+                music_extension = get_audio_extension_from_url(background_music_url)
+                bg_music_path = request_dir / f"background_music{music_extension}"
+                
+                success = await download_audio_from_url(session, background_music_url, bg_music_path)
+                if not success:
+                    raise HTTPException(status_code=400, detail=f"Failed to download background music from URL: {background_music_url}")
+
+                if not bg_music_path.exists() or bg_music_path.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail="Downloaded background music is empty or corrupted")
+
+        # Handle uploaded main audio file
+        if main_audio and main_audio.filename and not main_audio_url:
+            if not validate_file_size(main_audio):
+                raise HTTPException(status_code=413, detail="Main audio file is too large")
+
+            if not validate_audio_format(main_audio.filename):
+                raise HTTPException(status_code=400, detail="Main audio file has unsupported format")
+
+            main_audio_path = request_dir / f"main_audio{Path(main_audio.filename).suffix}"
+            await save_upload_file(main_audio, main_audio_path)
+
+        # Handle uploaded background music file
+        if background_music and background_music.filename and not background_music_url:
+            if not validate_file_size(background_music):
+                raise HTTPException(status_code=413, detail="Background music file is too large")
+
+            if not validate_audio_format(background_music.filename):
+                raise HTTPException(status_code=400, detail="Background music file has unsupported format")
+
+            bg_music_path = request_dir / f"background_music{Path(background_music.filename).suffix}"
+            await save_upload_file(background_music, bg_music_path)
+
+        # Create output video
+        output_filename = f"audio_video_{request_id}.mp4"
+        final_video_path = OUTPUT_DIR / output_filename
+
+        # Generate video with background image, mixed audio, and text overlay
+        success = create_video_with_audio_and_text(
+            bg_image_path,
+            main_audio_path,
+            bg_music_path,
+            final_video_path,
+            text_content,
+            video_duration,
+            fps,
+            audio_delay
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to create video with audio and text")
+
+        # Clean up uploaded files
+        shutil.rmtree(request_dir, ignore_errors=True)
+
+        if not final_video_path.exists():
+            raise HTTPException(status_code=500, detail="Video file was not created")
+
+        # Return success response
+        return {
+            "message": "Audio video created successfully",
+            "video_id": request_id,
+            "download_url": f"/download/{output_filename}",
+            "file_size": final_video_path.stat().st_size,
+            "video_duration": video_duration,
+            "audio_delay": audio_delay,
+            "text_content": text_content,
+            "background_image_source": "url",
+            "main_audio_source": "url" if main_audio_url else "file",
+            "background_music_source": "url" if background_music_url else "file"
         }
 
     except HTTPException:
