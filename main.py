@@ -513,14 +513,14 @@ def create_video_with_audio_and_text(
             logger.error(f"Background music does not exist: {background_music_path}")
             return False
 
-        # Format text with line breaks (split into lines of ~3-4 words each)
+        # Format text with line breaks (split into lines of ~2-3 words each for better fitting)
         words = text_content.split()
         lines = []
         current_line = []
         
         for word in words:
             current_line.append(word)
-            if len(current_line) >= 3:  # 3-4 words per line for better readability
+            if len(current_line) >= 2:  # 2-3 words per line to prevent text cutoff
                 lines.append(' '.join(current_line))
                 current_line = []
         
@@ -540,22 +540,23 @@ def create_video_with_audio_and_text(
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
             f"drawtext=text='{formatted_text}':"
-            f"fontsize=72:"
+            f"fontsize=64:"  # Slightly smaller font to fit better
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"  # Center horizontally
             f"y=(h-text_h)/2:"  # Center vertically
-            f"box=1:boxcolor=white@0.9:boxborderw=40:"  # White background box for better readability
-            f"shadowcolor=gray:shadowx=3:shadowy=3"  # Subtle shadow
+            f"box=1:boxcolor=white@0.9:boxborderw=50:"  # Larger padding for better margins
+            f"shadowcolor=gray:shadowx=3:shadowy=3:"  # Subtle shadow
+            f"text_align=C"  # Center align text
         )
 
         # Build audio filter for mixing:
         # - Background music starts immediately and loops
         # - Main audio starts after delay (convert delay to milliseconds)
-        # - Mix both with background music at lower volume
+        # - Mix both with background music at much lower volume and boosted main audio
         audio_delay_ms = int(audio_delay * 1000)
         audio_filter = (
-            f"[1:a]volume=0.15[bg];"  # Background music at 15% volume (reduced by 50%)
-            f"[2:a]adelay={audio_delay_ms}[delayed];"  # Delay main audio (simplified for mono)
+            f"[1:a]volume=0.08[bg];"  # Background music at 8% volume (further reduced)
+            f"[2:a]volume=1.2,adelay={audio_delay_ms}[delayed];"  # Boost main audio to 120% and delay
             f"[bg][delayed]amix=inputs=2:duration=first:dropout_transition=2[mixed]"  # Mix both audio tracks
         )
 
