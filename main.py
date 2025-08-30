@@ -492,7 +492,8 @@ def create_video_with_audio_and_text(
     text_content: str,
     video_duration: float = 30.0,
     fps: int = 25,
-    audio_delay: float = 2.0
+    audio_delay: float = 2.0,
+    tail_after_audio: float = 2.0
 ) -> bool:
     """Create video with background image, mixed audio, and centered text overlay"""
     try:
@@ -500,7 +501,10 @@ def create_video_with_audio_and_text(
         logger.info(f"Main audio: {main_audio_path}")
         logger.info(f"Background music: {background_music_path}")
         logger.info(f"Text content: {text_content}")
-        logger.info(f"Video duration: {video_duration}s, Audio delay: {audio_delay}s")
+        logger.info(
+            f"Requested video duration (fallback): {video_duration}s, "
+            f"Audio delay: {audio_delay}s, Tail after audio: {tail_after_audio}s"
+        )
 
         # Verify all input files exist
         if not background_image_path.exists():
@@ -512,6 +516,36 @@ def create_video_with_audio_and_text(
         if not background_music_path.exists():
             logger.error(f"Background music does not exist: {background_music_path}")
             return False
+
+        # Determine target duration: end 2 seconds after main audio finishes
+        def _probe_audio_duration(p: Path) -> Optional[float]:
+            try:
+                r = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(p)
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if r.returncode == 0:
+                    val = r.stdout.strip()
+                    return float(val) if val else None
+            except Exception as e:
+                logger.warning(f"ffprobe duration check failed for {p}: {e}")
+            return None
+
+        target_duration = video_duration
+        _main_dur = _probe_audio_duration(main_audio_path)
+        if _main_dur and _main_dur > 0:
+            target_duration = max(0.1, _main_dur + audio_delay + tail_after_audio)
+        logger.info(
+            f"Computed target video duration: {target_duration:.3f}s "
+            f"(main_audio={_main_dur}s + delay={audio_delay}s + tail={tail_after_audio}s)"
+        )
 
         # Format text with greedy line breaks based on an estimated character width
         # so we can fit as many words as possible while respecting left/right margins.
@@ -582,18 +616,20 @@ def create_video_with_audio_and_text(
         # - Background music starts immediately and loops
         # - Main audio starts after delay (convert delay to milliseconds)
         # - Mix both with background music at much lower volume and boosted main audio
+        # - Use duration=longest so background keeps playing after main finishes; overall
+        #   video stops at target_duration (main end + 2 seconds)
         audio_delay_ms = int(audio_delay * 1000)
         audio_filter = (
             f"[1:a]volume=0.08[bg];"  # Background music at 8% volume (further reduced)
             f"[2:a]volume=1.2,adelay={audio_delay_ms}[delayed];"  # Boost main audio to 120% and delay
-            f"[bg][delayed]amix=inputs=2:duration=first:dropout_transition=2[mixed]"  # Mix both audio tracks
+            f"[bg][delayed]amix=inputs=2:duration=longest:dropout_transition=2[mixed]"  # Keep bg for tail
         )
 
         # FFmpeg command with three inputs: background image, background music, main audio
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1",
-            "-t", str(video_duration),
+            "-t", str(target_duration),
             "-r", str(fps),  # Set input framerate before input
             "-i", str(background_image_path),  # Input 0: Background image
             "-stream_loop", "-1",
@@ -609,7 +645,7 @@ def create_video_with_audio_and_text(
             "-c:a", "aac",
             "-b:a", "128k",  # Standard audio bitrate
             "-ar", "44100",  # Standard audio sample rate
-            "-t", str(video_duration),  # Limit output duration
+            "-t", str(target_duration),  # Limit output duration
             "-map", "0:v:0",  # Video from background image
             "-map", "[mixed]",  # Mixed audio
             "-movflags", "+faststart",
