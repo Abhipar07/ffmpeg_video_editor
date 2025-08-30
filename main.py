@@ -540,11 +540,11 @@ def create_video_with_audio_and_text(
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
             f"drawtext=text='{formatted_text}':"
-            f"fontsize=60:"
+            f"fontsize=72:"
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"  # Center horizontally
             f"y=(h-text_h)/2:"  # Center vertically
-            f"box=1:boxcolor=white@0.8:boxborderw=30:"  # White background box for better readability
+            f"box=1:boxcolor=white@0.9:boxborderw=40:"  # White background box for better readability
             f"shadowcolor=gray:shadowx=3:shadowy=3"  # Subtle shadow
         )
 
@@ -554,7 +554,7 @@ def create_video_with_audio_and_text(
         # - Mix both with background music at lower volume
         audio_delay_ms = int(audio_delay * 1000)
         audio_filter = (
-            f"[1:a]volume=0.3[bg];"  # Background music at 30% volume
+            f"[1:a]volume=0.15[bg];"  # Background music at 15% volume (reduced by 50%)
             f"[2:a]adelay={audio_delay_ms}[delayed];"  # Delay main audio (simplified for mono)
             f"[bg][delayed]amix=inputs=2:duration=first:dropout_transition=2[mixed]"  # Mix both audio tracks
         )
