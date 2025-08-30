@@ -47,6 +47,39 @@ SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 MAX_URL_LENGTH = 2048
 
+# Assets directory and helper to locate a Poppins font file. We prioritize:
+# 1) POPPINS_FONT_PATH env var (absolute path recommended)
+# 2) Common filenames in the repo under assets/ or assets/fonts/
+ASSETS_DIR = Path("assets")
+
+def get_poppins_font_path() -> Optional[Path]:
+    env_path = os.environ.get("POPPINS_FONT_PATH")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    candidates = [
+        ASSETS_DIR / "poppins_semibold.ttf",
+        ASSETS_DIR / "Poppins-SemiBold.ttf",
+        ASSETS_DIR / "Poppins-SemiBold.otf",
+        ASSETS_DIR / "fonts" / "poppins_semibold.ttf",
+        ASSETS_DIR / "fonts" / "Poppins-SemiBold.ttf",
+        ASSETS_DIR / "fonts" / "Poppins-Regular.ttf",
+    ]
+
+    for c in candidates:
+        if c.exists():
+            return c
+
+    # As a last attempt, scan assets for any file containing 'poppins'
+    if ASSETS_DIR.exists():
+        for ext in ("*.ttf", "*.otf"):
+            for fp in ASSETS_DIR.rglob(ext):
+                if "poppins" in fp.name.lower():
+                    return fp
+    return None
+
 def check_ffmpeg():
     """Check if FFmpeg is available"""
     try:
@@ -596,11 +629,20 @@ def create_video_with_audio_and_text(
 
         textfile_path = Path(tmp_txt.name).as_posix()
 
+        # Choose Poppins font if available, otherwise fall back to system font by family name
+        poppins_fp = get_poppins_font_path()
+        if poppins_fp is not None and Path(poppins_fp).exists():
+            font_spec = f"fontfile='{Path(poppins_fp).resolve().as_posix()}'"
+            logger.info(f"Using Poppins fontfile: {Path(poppins_fp).resolve().as_posix()}")
+        else:
+            font_spec = "font=Poppins"
+            logger.warning("Poppins font not found in assets or POPPINS_FONT_PATH. Falling back to 'Poppins' family name.")
+
         # Build video filter with background image, scaling, and text overlay (using textfile)
         video_filter = (
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-            f"drawtext=textfile='{textfile_path}':"
+            f"drawtext=textfile='{textfile_path}':{font_spec}:"
             f"fontsize={font_size}:"
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"
