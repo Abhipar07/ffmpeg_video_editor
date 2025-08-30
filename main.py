@@ -536,11 +536,19 @@ def create_video_with_audio_and_text(
         if current_line:  # Add remaining words
             lines.append(' '.join(current_line))
         
-        # Join lines with FFmpeg-compatible newline format
-        formatted_text = '\\n'.join(lines)
-        
-        # Escape special characters for FFmpeg
-        formatted_text = formatted_text.replace("'", "\\'").replace(":", "\\:")
+        # Join lines using real newlines first
+        formatted_text = '\n'.join(lines)
+
+        # Escape characters FFmpeg drawtext treats specially, then convert
+        # newlines to the literal "\n" sequence which drawtext expects
+        formatted_text = (
+            formatted_text
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace(":", "\\:")
+            .replace(",", "\\,")
+            .replace("\n", "\\n")
+        )
         
         logger.info(f"Formatted text: {formatted_text}")
 
