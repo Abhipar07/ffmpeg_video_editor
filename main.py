@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import subprocess
@@ -579,13 +579,13 @@ def add_audio_to_video(video_path: Path, audio_path: Path, output_path: Path) ->
 
 def create_video_with_audio_and_text(
     background_image_path: Path,
-    main_audio_path: Path,
+    main_audio_path: Optional[Path],
     background_music_path: Path,
     output_path: Path,
     text_content: str,
-    video_duration: float = 30.0,
+    video_duration: float = 15.0,
     fps: int = 25,
-    audio_delay: float = 2.0,
+    audio_delay: float = 0.0,
     tail_after_audio: float = 2.0
 ) -> bool:
     """Create video with background image, mixed audio, and centered text overlay"""
@@ -603,7 +603,7 @@ def create_video_with_audio_and_text(
         if not background_image_path.exists():
             logger.error(f"Background image does not exist: {background_image_path}")
             return False
-        if not main_audio_path.exists():
+        if main_audio_path is not None and not main_audio_path.exists():
             logger.error(f"Main audio does not exist: {main_audio_path}")
             return False
         if not background_music_path.exists():
@@ -631,13 +631,17 @@ def create_video_with_audio_and_text(
                 logger.warning(f"ffprobe duration check failed for {p}: {e}")
             return None
 
-        target_duration = video_duration
-        _main_dur = _probe_audio_duration(main_audio_path)
-        if _main_dur and _main_dur > 0:
-            target_duration = max(0.1, _main_dur + audio_delay + tail_after_audio)
+        if main_audio_path is None:
+            target_duration = 15.0 if video_duration is None else float(video_duration)
+            _main_dur = None
+        else:
+            target_duration = video_duration
+            _main_dur = _probe_audio_duration(main_audio_path)
+            if _main_dur and _main_dur > 0:
+                target_duration = max(0.1, _main_dur + audio_delay + tail_after_audio)
         logger.info(
             f"Computed target video duration: {target_duration:.3f}s "
-            f"(main_audio={_main_dur}s + delay={audio_delay}s + tail={tail_after_audio}s)"
+            f"(main_audio={_main_dur})"
         )
 
         # Format text with greedy line breaks based on an estimated character width
@@ -714,18 +718,18 @@ def create_video_with_audio_and_text(
             f"text_shaping=1"  # Better rendering for complex scripts and spacing
         )
 
-        # Build audio filter for mixing:
-        # - Background music starts immediately and loops
-        # - Main audio starts after delay (convert delay to milliseconds)
-        # - Mix both with background music at much lower volume and boosted main audio
-        # - Use duration=longest so background keeps playing after main finishes; overall
-        #   video stops at target_duration (main end + 2 seconds)
-        audio_delay_ms = int(audio_delay * 1000)
-        audio_filter = (
-            f"[1:a]volume=0.08[bg];"  # Background music at 8% volume (further reduced)
-            f"[2:a]volume=1.2,adelay={audio_delay_ms}[delayed];"  # Boost main audio to 120% and delay
-            f"[bg][delayed]amix=inputs=2:duration=longest:dropout_transition=2[mixed]"  # Keep bg for tail
-        )
+        # Build audio filter: if no main audio, use background music only at 150% of previous 0.08 -> 0.12
+        if main_audio_path is None:
+            audio_filter = (
+                f"[1:a]volume=0.12[aout]"  # Background music at 12% volume
+            )
+        else:
+            audio_delay_ms = int(audio_delay * 1000)
+            audio_filter = (
+                f"[1:a]volume=0.12[bg];"  # Increased background music volume to 12%
+                f"[2:a]volume=1.2,adelay={audio_delay_ms}[delayed];"
+                f"[bg][delayed]amix=inputs=2:duration=longest:dropout_transition=2[mixed]"
+            )
 
         # FFmpeg command with three inputs: background image, background music, main audio
         cmd = [
@@ -736,7 +740,10 @@ def create_video_with_audio_and_text(
             "-i", str(background_image_path),  # Input 0: Background image
             "-stream_loop", "-1",
             "-i", str(background_music_path),  # Input 1: Background music (looped)
-            "-i", str(main_audio_path),        # Input 2: Main audio
+        ]
+        if main_audio_path is not None:
+            cmd += ["-i", str(main_audio_path)]
+        cmd += [
             "-vf", video_filter,
             "-filter_complex", audio_filter,
             "-c:v", "libx264",
@@ -747,9 +754,9 @@ def create_video_with_audio_and_text(
             "-c:a", "aac",
             "-b:a", "128k",  # Standard audio bitrate
             "-ar", "44100",  # Standard audio sample rate
-            "-t", str(target_duration),  # Limit output duration
-            "-map", "0:v:0",  # Video from background image
-            "-map", "[mixed]",  # Mixed audio
+            "-t", str(target_duration),
+            "-map", "0:v:0",
+            "-map", "[mixed]" if main_audio_path is not None else "[aout]",
             "-movflags", "+faststart",
             str(output_path)
         ]
@@ -954,21 +961,14 @@ async def create_video(
 
 @app.post("/create-audio-video")
 async def create_audio_video(
-    request: Request,
     background_image_url: str = Form(..., description="Background image URL"),
-    main_audio: Optional[UploadFile] = File(None, description="Main audio file (optional; if omitted, TTS will be generated)"),
-    main_audio_url: Optional[str] = Form(None, description="Main audio URL (optional; if omitted, TTS will be generated)"),
     background_music: Optional[UploadFile] = File(None, description="Background music file"),
     background_music_url: Optional[str] = Form(None, description="Background music URL"),
-    text_content: str = Form(..., description="Text content to speak and display (5-20 words)"),
-    video_duration: float = Form(30.0, description="Fallback video duration in seconds"),
-    audio_delay: float = Form(2.0, description="Delay for main audio in seconds"),
+    text_content: str = Form(..., description="Text content to display (5-20 words)"),
+    video_duration: float = Form(15.0, description="Video duration in seconds (default 15)"),
     fps: int = Form(25, description="Output video FPS")
 ):
-    """Create video with background image, TTS (if needed), mixed audio, and centered text overlay.
-    If no main audio is provided via file or URL, we will generate speech using ElevenLabs.
-    Provide your ElevenLabs key in request header: xi-api-key: <KEY>.
-    """
+    """Create video with background image, background music only (no main audio), and centered text overlay."""
     
     # Check FFmpeg availability
     if not check_ffmpeg():
@@ -984,27 +984,20 @@ async def create_audio_video(
     if not text_content or len(text_content.strip()) == 0:
         raise HTTPException(status_code=400, detail="Text content is required")
 
-    # Validate text length (should be 10-15 words)
+    # Validate text length (should be 5-20 words)
     word_count = len(text_content.strip().split())
     if word_count < 5 or word_count > 20:
         raise HTTPException(status_code=400, detail="Text content should be between 5-20 words")
 
-    # Main audio is optional now (we can generate via ElevenLabs)
-
+    # Background music required
     if not ((background_music and background_music.filename) or background_music_url):
         raise HTTPException(status_code=400, detail="Background music (file or URL) is required")
 
     # Validate that only one source per audio type is provided
-    if (main_audio and main_audio.filename) and main_audio_url:
-        raise HTTPException(status_code=400, detail="Provide either main audio file or URL, not both")
-
     if (background_music and background_music.filename) and background_music_url:
         raise HTTPException(status_code=400, detail="Provide either background music file or URL, not both")
 
     # Validate audio URLs if provided
-    if main_audio_url and not validate_audio_url(main_audio_url):
-        raise HTTPException(status_code=400, detail="Invalid main audio URL format")
-
     if background_music_url and not validate_audio_url(background_music_url):
         raise HTTPException(status_code=400, detail="Invalid background music URL format")
 
@@ -1027,24 +1020,6 @@ async def create_audio_video(
             if not bg_image_path.exists() or bg_image_path.stat().st_size == 0:
                 raise HTTPException(status_code=400, detail="Downloaded background image is empty or corrupted")
 
-            # Handle main audio
-            main_audio_path = None
-            if main_audio_url:
-                # Download from URL
-                audio_extension = get_audio_extension_from_url(main_audio_url)
-                main_audio_path = request_dir / f"main_audio{audio_extension}"
-                
-                success = await download_audio_from_url(session, main_audio_url, main_audio_path)
-                if not success:
-                    raise HTTPException(status_code=400, detail=f"Failed to download main audio from URL: {main_audio_url}")
-
-                if not main_audio_path.exists() or main_audio_path.stat().st_size == 0:
-                    raise HTTPException(status_code=400, detail="Downloaded main audio is empty or corrupted")
-            else:
-                # No main audio provided via URL — try uploaded file after this block,
-                # or fallback to TTS generation below.
-                pass
-
             # Handle background music
             bg_music_path = None
             if background_music_url:
@@ -1059,27 +1034,7 @@ async def create_audio_video(
                 if not bg_music_path.exists() or bg_music_path.stat().st_size == 0:
                     raise HTTPException(status_code=400, detail="Downloaded background music is empty or corrupted")
 
-        # Handle uploaded main audio file
-        if main_audio and main_audio.filename and not main_audio_url:
-            if not validate_file_size(main_audio):
-                raise HTTPException(status_code=413, detail="Main audio file is too large")
-
-            if not validate_audio_format(main_audio.filename):
-                raise HTTPException(status_code=400, detail="Main audio file has unsupported format")
-
-            main_audio_path = request_dir / f"main_audio{Path(main_audio.filename).suffix}"
-            await save_upload_file(main_audio, main_audio_path)
-        # If still no main_audio_path, generate via ElevenLabs from text_content
-        if not main_audio_url and not (main_audio and main_audio.filename):
-            api_key = request.headers.get("xi-api-key")
-            if not api_key:
-                raise HTTPException(status_code=400, detail="Missing ElevenLabs API key in header 'xi-api-key'")
-            # Generate TTS
-            async with aiohttp.ClientSession() as tts_session:
-                main_audio_path = request_dir / "main_audio.mp3"
-                ok = await generate_elevenlabs_tts(tts_session, api_key, text_content, main_audio_path)
-                if not ok:
-                    raise HTTPException(status_code=502, detail="Failed to generate TTS audio from ElevenLabs")
+        # No main audio: always use background music only
 
         # Handle uploaded background music file
         if background_music and background_music.filename and not background_music_url:
@@ -1099,13 +1054,13 @@ async def create_audio_video(
         # Generate video with background image, mixed audio, and text overlay
         success = create_video_with_audio_and_text(
             bg_image_path,
-            main_audio_path,
+            None,
             bg_music_path,
             final_video_path,
             text_content,
-            video_duration,
+            15.0,
             fps,
-            audio_delay
+            0.0
         )
 
         if not success:
@@ -1123,11 +1078,11 @@ async def create_audio_video(
             "video_id": request_id,
             "download_url": f"/download/{output_filename}",
             "file_size": final_video_path.stat().st_size,
-            "video_duration": video_duration,
-            "audio_delay": audio_delay,
+            "video_duration": 15.0,
+            "audio_delay": 0.0,
             "text_content": text_content,
             "background_image_source": "url",
-            "main_audio_source": ("url" if main_audio_url else ("file" if (main_audio and main_audio.filename) else "tts")),
+            "main_audio_source": None,
             "background_music_source": "url" if background_music_url else "file"
         }
 
