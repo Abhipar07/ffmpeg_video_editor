@@ -513,17 +513,25 @@ def create_video_with_audio_and_text(
             logger.error(f"Background music does not exist: {background_music_path}")
             return False
 
-        # Format text with line breaks (split into lines of 1-2 words each for tight fitting)
+        # Format text with character-based line breaks to ensure it fits within video width
         words = text_content.split()
         lines = []
         current_line = []
+        max_chars_per_line = 20  # Conservative character limit for 1080px width
         
         for word in words:
-            current_line.append(word)
-            # Use only 1-2 words per line and check character length
-            if len(current_line) >= 2 or len(' '.join(current_line)) > 15:  # Max 15 characters per line
-                lines.append(' '.join(current_line))
-                current_line = []
+            # Check if adding this word would exceed character limit
+            test_line = ' '.join(current_line + [word])
+            if len(test_line) <= max_chars_per_line and len(current_line) < 2:
+                current_line.append(word)
+            else:
+                # Start new line if current line has content
+                if current_line:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                else:
+                    # Single word is too long, just add it
+                    lines.append(word)
         
         if current_line:  # Add remaining words
             lines.append(' '.join(current_line))
@@ -536,19 +544,18 @@ def create_video_with_audio_and_text(
         
         logger.info(f"Formatted text: {formatted_text}")
 
-        # Build video filter with background image, scaling, and text overlay
+        # Build video filter with background image, scaling, and text overlay with width constraints
         video_filter = (
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
             f"drawtext=text='{formatted_text}':"
-            f"fontsize=48:"  # Much smaller font for guaranteed fit
+            f"fontsize=56:"  # Smaller font to ensure fitting
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"  # Center horizontally
             f"y=(h-text_h)/2:"  # Center vertically
-            f"box=1:boxcolor=white@0.9:boxborderw=60:"  # Extra large padding for safe margins
+            f"box=1:boxcolor=white@0.9:boxborderw=60:"  # Extra padding for margins
             f"shadowcolor=gray:shadowx=2:shadowy=2:"  # Subtle shadow
             f"text_align=C:"  # Center align text
-            f"textfile=,"  # Ensure proper text wrapping
             f"line_spacing=10"  # Add line spacing for better readability
         )
 
