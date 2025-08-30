@@ -536,7 +536,7 @@ def create_video_with_audio_and_text(
         if current_line:  # Add remaining words
             lines.append(' '.join(current_line))
         
-        # Join lines with newline character for FFmpeg drawtext
+        # Join lines with FFmpeg-compatible newline format
         formatted_text = '\\n'.join(lines)
         
         # Escape special characters for FFmpeg
