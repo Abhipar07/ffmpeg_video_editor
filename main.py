@@ -722,10 +722,11 @@ def create_video_with_audio_and_text(
             f"text_shaping=1"  # Better rendering for complex scripts and spacing
         )
 
-        # Build audio filter: if no main audio, use background music only at 150% of previous 0.08 -> 0.12
+        # Build audio filter: if no main audio, boost background music significantly
+        # Note: volume is a linear multiplier. 3.0 ~= +9.5 dB. Increase/decrease as needed.
         if main_audio_path is None:
             audio_filter = (
-                f"[1:a]volume=1.0[aout]"  # Background music at 100% volume
+                f"[1:a]volume=3.0[aout]"  # Boost background music to ~+9.5 dB
             )
         else:
             audio_delay_ms = int(audio_delay * 1000)
