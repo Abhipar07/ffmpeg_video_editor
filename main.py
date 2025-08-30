@@ -1041,7 +1041,9 @@ async def create_audio_video(
                 if not main_audio_path.exists() or main_audio_path.stat().st_size == 0:
                     raise HTTPException(status_code=400, detail="Downloaded main audio is empty or corrupted")
             else:
-                # No main audio provided via URL — try uploaded file after this block, or fallback to TTS
+                # No main audio provided via URL — try uploaded file after this block,
+                # or fallback to TTS generation below.
+                pass
 
             # Handle background music
             bg_music_path = None
