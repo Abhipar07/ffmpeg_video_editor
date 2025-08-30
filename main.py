@@ -571,9 +571,10 @@ def create_video_with_audio_and_text(
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"
             f"y=(h-text_h)/2:"
-            f"box=1:boxcolor=white@0.9:boxborderw={box_margin}:"
+            f"box=1:boxcolor=white@0.45:boxborderw={box_margin}:"  # 50% more transparent
             f"shadowcolor=gray:shadowx=2:shadowy=2:"
             f"line_spacing=10:"
+            f"text_align=center:"
             f"text_shaping=1"  # Better rendering for complex scripts and spacing
         )
 
