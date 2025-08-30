@@ -536,35 +536,36 @@ def create_video_with_audio_and_text(
         if current_line:  # Add remaining words
             lines.append(' '.join(current_line))
         
-        # Join lines using real newlines first
+        # Join lines using real newlines. We will pass this via a text file to avoid
+        # complex escaping issues that can cause stray characters like "n" to appear.
         formatted_text = '\n'.join(lines)
-
-        # Escape characters FFmpeg drawtext treats specially, then convert
-        # newlines to the literal "\n" sequence which drawtext expects
-        formatted_text = (
-            formatted_text
-            .replace("\\", "\\\\")
-            .replace("'", "\\'")
-            .replace(":", "\\:")
-            .replace(",", "\\,")
-            .replace("\n", "\\n")
-        )
         
         logger.info(f"Formatted text: {formatted_text}")
 
-        # Build video filter with background image, scaling, and text overlay with width constraints
+        # Write formatted text to a temporary file and use drawtext=textfile=... .
+        # This guarantees proper newlines and spaces rendering.
+        tmp_txt = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+        try:
+            tmp_txt.write(formatted_text)
+            tmp_txt.flush()
+        finally:
+            tmp_txt.close()
+
+        textfile_path = Path(tmp_txt.name).as_posix()
+
+        # Build video filter with background image, scaling, and text overlay (using textfile)
         video_filter = (
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-            f"drawtext=text='{formatted_text}':"
-            f"fontsize=56:"  # Smaller font to ensure fitting
+            f"drawtext=textfile='{textfile_path}':"
+            f"fontsize=56:"
             f"fontcolor=black:"
-            f"x=(w-text_w)/2:"  # Center horizontally
-            f"y=(h-text_h)/2:"  # Center vertically
-            f"box=1:boxcolor=white@0.9:boxborderw=60:"  # Extra padding for margins
-            f"shadowcolor=gray:shadowx=2:shadowy=2:"  # Subtle shadow
-            f"text_align=C:"  # Center align text
-            f"line_spacing=10"  # Add line spacing for better readability
+            f"x=(w-text_w)/2:"
+            f"y=(h-text_h)/2:"
+            f"box=1:boxcolor=white@0.9:boxborderw=60:"
+            f"shadowcolor=gray:shadowx=2:shadowy=2:"
+            f"line_spacing=10:"
+            f"text_shaping=1"  # Better rendering for complex scripts and spacing
         )
 
         # Build audio filter for mixing:
@@ -607,6 +608,12 @@ def create_video_with_audio_and_text(
 
         logger.info(f"FFmpeg command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+        # Clean up temp text file
+        try:
+            Path(tmp_txt.name).unlink(missing_ok=True)
+        except Exception:
+            pass
 
         if result.returncode != 0:
             logger.error(f"FFmpeg error (return code {result.returncode}): {result.stderr}")
