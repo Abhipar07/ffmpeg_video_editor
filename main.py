@@ -13,6 +13,7 @@ import logging
 import aiohttp
 import aiofiles
 from urllib.parse import urlparse
+import string
 import mimetypes
 
 # Configure logging
@@ -644,9 +645,12 @@ def create_video_with_audio_and_text(
             f"(main_audio={_main_dur})"
         )
 
+        # Normalize and CamelCase (Title Case) the text: first letter of each word capitalized
+        cased_text = string.capwords(text_content.strip())
+
         # Format text with greedy line breaks based on an estimated character width
         # so we can fit as many words as possible while respecting left/right margins.
-        words = text_content.split()
+        words = cased_text.split()
         lines = []
         current_line = []
 
