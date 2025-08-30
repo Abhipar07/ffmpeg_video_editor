@@ -513,14 +513,15 @@ def create_video_with_audio_and_text(
             logger.error(f"Background music does not exist: {background_music_path}")
             return False
 
-        # Format text with line breaks (split into lines of ~2-3 words each for better fitting)
+        # Format text with line breaks (split into lines of 1-2 words each for tight fitting)
         words = text_content.split()
         lines = []
         current_line = []
         
         for word in words:
             current_line.append(word)
-            if len(current_line) >= 2:  # 2-3 words per line to prevent text cutoff
+            # Use only 1-2 words per line and check character length
+            if len(current_line) >= 2 or len(' '.join(current_line)) > 15:  # Max 15 characters per line
                 lines.append(' '.join(current_line))
                 current_line = []
         
@@ -540,13 +541,15 @@ def create_video_with_audio_and_text(
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
             f"drawtext=text='{formatted_text}':"
-            f"fontsize=64:"  # Slightly smaller font to fit better
+            f"fontsize=48:"  # Much smaller font for guaranteed fit
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"  # Center horizontally
             f"y=(h-text_h)/2:"  # Center vertically
-            f"box=1:boxcolor=white@0.9:boxborderw=50:"  # Larger padding for better margins
-            f"shadowcolor=gray:shadowx=3:shadowy=3:"  # Subtle shadow
-            f"text_align=C"  # Center align text
+            f"box=1:boxcolor=white@0.9:boxborderw=60:"  # Extra large padding for safe margins
+            f"shadowcolor=gray:shadowx=2:shadowy=2:"  # Subtle shadow
+            f"text_align=C:"  # Center align text
+            f"textfile=,"  # Ensure proper text wrapping
+            f"line_spacing=10"  # Add line spacing for better readability
         )
 
         # Build audio filter for mixing:
