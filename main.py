@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import subprocess
@@ -257,6 +257,66 @@ def get_audio_extension_from_url(url: str, content_type: str = None) -> str:
 
     # Default fallback
     return '.mp3'
+
+async def generate_elevenlabs_tts(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    text: str,
+    destination: Path,
+    voice_id: str = "LcfcDJNUP1GQjkzn1xUU",
+    model_id: str = "eleven_multilingual_v2",
+    stability: float = 0.5,
+    similarity_boost: float = 0.7,
+    timeout_sec: int = 60
+) -> bool:
+    """Generate speech using ElevenLabs TTS and save as MP3 to destination.
+    Returns True on success, False on failure. Logs detailed info.
+    """
+    try:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        headers = {
+            "xi-api-key": api_key,
+            "accept": "audio/mpeg",
+            "content-type": "application/json"
+        }
+        payload = {
+            "text": text,
+            "model_id": model_id,
+            "voice_settings": {
+                "stability": stability,
+                "similarity_boost": similarity_boost
+            }
+        }
+        logger.info(f"Requesting TTS from ElevenLabs: voice_id={voice_id}, model={model_id}")
+        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=timeout_sec)) as resp:
+            if resp.status != 200:
+                # Try to read error text safely
+                try:
+                    err_text = await resp.text()
+                except Exception:
+                    err_text = "<no body>"
+                logger.error(f"ElevenLabs TTS failed: HTTP {resp.status} - {err_text}")
+                return False
+
+            # Save binary audio
+            async with aiofiles.open(destination, 'wb') as f:
+                total = 0
+                async for chunk in resp.content.iter_chunked(8192):
+                    total += len(chunk)
+                    if total > MAX_FILE_SIZE:
+                        logger.error(f"Generated audio too large: {total} bytes")
+                        return False
+                    await f.write(chunk)
+
+        if not destination.exists() or destination.stat().st_size == 0:
+            logger.error("TTS audio file not created or empty")
+            return False
+
+        logger.info(f"ElevenLabs TTS saved: {destination} ({destination.stat().st_size} bytes)")
+        return True
+    except Exception as e:
+        logger.error(f"Error generating TTS via ElevenLabs: {e}")
+        return False
 
 def create_video_from_images(
     image_paths: List[Path],
@@ -894,17 +954,21 @@ async def create_video(
 
 @app.post("/create-audio-video")
 async def create_audio_video(
+    request: Request,
     background_image_url: str = Form(..., description="Background image URL"),
-    main_audio: Optional[UploadFile] = File(None, description="Main audio file"),
-    main_audio_url: Optional[str] = Form(None, description="Main audio URL"),
+    main_audio: Optional[UploadFile] = File(None, description="Main audio file (optional; if omitted, TTS will be generated)"),
+    main_audio_url: Optional[str] = Form(None, description="Main audio URL (optional; if omitted, TTS will be generated)"),
     background_music: Optional[UploadFile] = File(None, description="Background music file"),
     background_music_url: Optional[str] = Form(None, description="Background music URL"),
-    text_content: str = Form(..., description="Text content to display (10-15 words)"),
-    video_duration: float = Form(30.0, description="Video duration in seconds"),
+    text_content: str = Form(..., description="Text content to speak and display (5-20 words)"),
+    video_duration: float = Form(30.0, description="Fallback video duration in seconds"),
     audio_delay: float = Form(2.0, description="Delay for main audio in seconds"),
     fps: int = Form(25, description="Output video FPS")
 ):
-    """Create video with background image, mixed audio, and centered text overlay"""
+    """Create video with background image, TTS (if needed), mixed audio, and centered text overlay.
+    If no main audio is provided via file or URL, we will generate speech using ElevenLabs.
+    Provide your ElevenLabs key in request header: xi-api-key: <KEY>.
+    """
     
     # Check FFmpeg availability
     if not check_ffmpeg():
@@ -925,9 +989,7 @@ async def create_audio_video(
     if word_count < 5 or word_count > 20:
         raise HTTPException(status_code=400, detail="Text content should be between 5-20 words")
 
-    # Validate that audio sources are provided
-    if not ((main_audio and main_audio.filename) or main_audio_url):
-        raise HTTPException(status_code=400, detail="Main audio (file or URL) is required")
+    # Main audio is optional now (we can generate via ElevenLabs)
 
     if not ((background_music and background_music.filename) or background_music_url):
         raise HTTPException(status_code=400, detail="Background music (file or URL) is required")
@@ -978,6 +1040,8 @@ async def create_audio_video(
 
                 if not main_audio_path.exists() or main_audio_path.stat().st_size == 0:
                     raise HTTPException(status_code=400, detail="Downloaded main audio is empty or corrupted")
+            else:
+                # No main audio provided via URL — try uploaded file after this block, or fallback to TTS
 
             # Handle background music
             bg_music_path = None
@@ -1003,6 +1067,17 @@ async def create_audio_video(
 
             main_audio_path = request_dir / f"main_audio{Path(main_audio.filename).suffix}"
             await save_upload_file(main_audio, main_audio_path)
+        # If still no main_audio_path, generate via ElevenLabs from text_content
+        if not main_audio_url and not (main_audio and main_audio.filename):
+            api_key = request.headers.get("xi-api-key")
+            if not api_key:
+                raise HTTPException(status_code=400, detail="Missing ElevenLabs API key in header 'xi-api-key'")
+            # Generate TTS
+            async with aiohttp.ClientSession() as tts_session:
+                main_audio_path = request_dir / "main_audio.mp3"
+                ok = await generate_elevenlabs_tts(tts_session, api_key, text_content, main_audio_path)
+                if not ok:
+                    raise HTTPException(status_code=502, detail="Failed to generate TTS audio from ElevenLabs")
 
         # Handle uploaded background music file
         if background_music and background_music.filename and not background_music_url:
@@ -1050,7 +1125,7 @@ async def create_audio_video(
             "audio_delay": audio_delay,
             "text_content": text_content,
             "background_image_source": "url",
-            "main_audio_source": "url" if main_audio_url else "file",
+            "main_audio_source": ("url" if main_audio_url else ("file" if (main_audio and main_audio.filename) else "tts")),
             "background_music_source": "url" if background_music_url else "file"
         }
 
