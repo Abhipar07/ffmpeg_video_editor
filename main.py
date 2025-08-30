@@ -513,24 +513,33 @@ def create_video_with_audio_and_text(
             logger.error(f"Background music does not exist: {background_music_path}")
             return False
 
-        # Format text with character-based line breaks to ensure it fits within video width
+        # Format text with greedy line breaks based on an estimated character width
+        # so we can fit as many words as possible while respecting left/right margins.
         words = text_content.split()
         lines = []
         current_line = []
-        max_chars_per_line = 20  # Conservative character limit for 1080px width
-        
+
+        # Rendering parameters (also used below in drawtext filter)
+        font_size = 56
+        box_margin = 60  # padding around text inside the box (left+right each)
+        min_lr_margin = 2 * box_margin  # total internal margin across width
+
+        # Estimate max characters per line using average glyph width ~= 0.55 * font_size
+        # Allowed pixel width for text content
+        allowed_px = 1080 - (2 * box_margin)
+        approx_char_px = max(1.0, 0.55 * font_size)
+        max_chars_per_line = max(10, int(allowed_px / approx_char_px))
+
         for word in words:
-            # Check if adding this word would exceed character limit
             test_line = ' '.join(current_line + [word])
-            if len(test_line) <= max_chars_per_line and len(current_line) < 2:
+            if len(test_line) <= max_chars_per_line:
                 current_line.append(word)
             else:
-                # Start new line if current line has content
                 if current_line:
                     lines.append(' '.join(current_line))
                     current_line = [word]
                 else:
-                    # Single word is too long, just add it
+                    # Very long word: put it alone on its own line
                     lines.append(word)
         
         if current_line:  # Add remaining words
@@ -558,11 +567,11 @@ def create_video_with_audio_and_text(
             f"scale=1080:1920:force_original_aspect_ratio=decrease,"
             f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
             f"drawtext=textfile='{textfile_path}':"
-            f"fontsize=56:"
+            f"fontsize={font_size}:"
             f"fontcolor=black:"
             f"x=(w-text_w)/2:"
             f"y=(h-text_h)/2:"
-            f"box=1:boxcolor=white@0.9:boxborderw=60:"
+            f"box=1:boxcolor=white@0.9:boxborderw={box_margin}:"
             f"shadowcolor=gray:shadowx=2:shadowy=2:"
             f"line_spacing=10:"
             f"text_shaping=1"  # Better rendering for complex scripts and spacing
